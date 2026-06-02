@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LANtern - Standalone Test Writer Studio</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- KaTeX for math typesetting -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css" crossorigin="anonymous">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js" crossorigin="anonymous"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    /* Simple custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #09090b;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #27272a;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3f3f46;
+    }
+  </style>
+</head>
+<body class="bg-[#09090B] text-[#FAFAFA] min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="bg-[#18181B] border-b border-[#27272A] px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4 select-none shrink-0">
+    <div class="flex items-center gap-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="font-black text-md tracking-tight uppercase text-white">LANtern Test Writer Studio</span>
+          <span class="text-[9px] bg-violet-950 text-violet-400 font-bold px-2 py-0.5 rounded border border-violet-800/40">STANDALONE</span>
+        </div>
+        <p class="text-xs text-[#A1A1AA] font-medium mt-0.5">Create, edit, and export JSON test sheets with live student previews</p>
+      </div>
+    </div>
+
+    <!-- Main action bar -->
+    <div class="flex flex-wrap items-center gap-3">
+      <!-- File drop / trigger area -->
+      <label class="flex items-center gap-1.5 px-3.5 py-2 bg-[#27272A] hover:bg-zinc-850 text-white rounded-lg text-xs font-semibold cursor-pointer transition-all border border-[#3F3F46] select-none hover:-translate-y-0.5">
+        <i data-lucide="upload" class="w-3.5 h-3.5 text-violet-400"></i>
+        <span>Import JSON</span>
+        <input type="file" id="file-uploader" class="hidden" accept=".json">
+      </label>
+
+      <button
+        onclick="exportJSON()"
+        class="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-xs font-bold shadow-md shadow-violet-900/30 cursor-pointer transition-all hover:shadow-violet-900/50 hover:-translate-y-0.5"
+      >
+        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+        <span>Export Test JSON</span>
+      </button>
+
+      <button
+        onclick="createNewTest()"
+        class="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-[#A1A1AA] hover:text-white rounded-lg text-xs font-semibold cursor-pointer transition-all"
+      >
+        <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-emerald-400"></i>
+        <span>New Draft</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Drag overlay target -->
+  <div id="drop-target" class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+
+    <!-- SIDEBAR: Questions list -->
+    <aside class="w-full md:w-[280px] bg-[#18181B] border-r border-[#27272A] flex flex-col overflow-y-auto shrink-0 select-none">
+      <!-- Section: Meta metrics -->
+      <div class="p-4 border-b border-[#27272A] space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-extrabold uppercase text-[#A1A1AA] tracking-wider">Test Sheets Configuration</h2>
+          <span class="text-[10px] font-mono text-violet-400 font-bold bg-violet-950/40 px-2 py-0.5 rounded border border-violet-900/30" id="total-questions-count">
+            0 questions
+          </span>
+        </div>
+
+        <div class="space-y-3">
+          <div>
+            <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1">Unique Identifier ID</label>
+            <input 
+              type="text" 
+              id="meta-id" 
+              oninput="updateMeta('test_id', this.value)"
+              placeholder="e.g. TEST_1"
+              class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+            >
+          </div>
+
+          <div>
+            <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1">Exam Event Title</label>
+            <input 
+              type="text" 
+              id="meta-name" 
+              oninput="updateMeta('event_name', this.value)"
+              placeholder="e.g. Physics Gravity A"
+              class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-semibold"
+            >
+          </div>
+
+          <div>
+            <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1 flex items-center justify-between">
+              <span>Lobby Instructions Text</span>
+              <span class="text-[8px] text-[#A1A1AA] font-mono">Optional</span>
+            </label>
+            <textarea 
+              id="meta-instructions" 
+              oninput="updateMeta('instructions', this.value)"
+              placeholder="Specify custom instructions for the students on the lobby screen."
+              rows="5"
+              class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-sans leading-relaxed text-stone-300 resize-none placeholder-stone-600"
+            ></textarea>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Section: Questions List Navigation -->
+      <div class="p-4 border-b border-[#27272A] flex items-center justify-between bg-[#0F0F11]">
+        <h3 class="text-xs font-black uppercase text-stone-300 tracking-wider flex items-center gap-1.5">
+          <i data-lucide="layers" class="w-3.5 h-3.5 text-violet-400"></i>
+          <span>Question Cards</span>
+        </h3>
+        <div class="flex items-center gap-1">
+          <button 
+            onclick="addQuestion('MC')"
+            class="px-2 py-1 bg-violet-600/10 text-violet-400 border border-violet-800/30 hover:bg-violet-600 hover:text-white rounded text-[10px] font-extrabold flex items-center gap-1 transition-colors cursor-pointer"
+            title="Add Multiple Choice Question"
+          >
+            + MC
+          </button>
+          <button 
+            onclick="addQuestion('FRQ')"
+            class="px-2 py-1 bg-violet-600/10 text-violet-400 border border-violet-800/30 hover:bg-violet-600 hover:text-white rounded text-[10px] font-extrabold flex items-center gap-1 transition-colors cursor-pointer"
+            title="Add Free Response Question"
+          >
+            + FRQ
+          </button>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto p-3 space-y-2 select-none" id="questions-list-root">
+        <!-- Questions injected here -->
+      </div>
+    </aside>
+
+    <!-- CENTER PANE: Editing Canvas -->
+    <main class="flex-1 bg-[#09090B] flex flex-col p-6 overflow-y-auto space-y-6">
+      
+      <div id="no-question-selected" class="flex-1 flex flex-col items-center justify-center text-center p-8">
+        <div class="w-16 h-16 bg-[#18181B] border border-[#27272A] rounded-2xl flex items-center justify-center text-[#52525B] mb-4">
+          <i data-lucide="file-edit" class="w-8 h-8"></i>
+        </div>
+        <h3 class="font-bold text-base text-white">No question selected</h3>
+        <p class="text-xs text-[#A1A1AA] max-w-sm mt-1 leading-relaxed">
+          Create a new question card using the sidebar buttons, or select an existing question card to begin editing its content.
+        </p>
+      </div>
+
+      <div id="question-editor-panel" class="hidden space-y-6">
+        
+        <!-- Header row of editing question -->
+        <div class="flex items-center justify-between border-b border-[#27272A] pb-4 select-none">
+          <div class="flex items-center gap-2.5">
+            <span class="w-7 h-7 bg-violet-600/20 text-violet-400 rounded-lg flex items-center justify-center font-bold text-xs border border-violet-500/20" id="editor-q-num-badge">
+              Q1
+            </span>
+            <div>
+              <span class="text-xs font-bold text-[#A1A1AA]" id="editor-q-type-label">MULTIPLE CHOICE</span>
+              <h2 class="text-lg font-black tracking-tight text-white mt-0.5" id="editor-q-title">Edit Question Options</h2>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button
+              onclick="moveSelectedQuestion(-1)"
+              class="p-2 bg-[#18181B] hover:bg-[#27272A] text-stone-400 hover:text-white rounded-lg border border-[#27272A] transition-colors cursor-pointer"
+              title="Move index up"
+            >
+              <i data-lucide="chevron-up" class="w-4 h-4"></i>
+            </button>
+            <button
+              onclick="moveSelectedQuestion(1)"
+              class="p-2 bg-[#18181B] hover:bg-[#27272A] text-stone-400 hover:text-white rounded-lg border border-[#27272A] transition-colors cursor-pointer"
+              title="Move index down"
+            >
+              <i data-lucide="chevron-down" class="w-4 h-4"></i>
+            </button>
+            <button
+              onclick="deleteSelectedQuestion()"
+              class="px-3.5 py-2 bg-red-950/20 hover:bg-red-650 hover:bg-red-900 border border-red-900/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
+            >
+              Delete Question
+            </button>
+          </div>
+        </div>
+
+        <!-- Question content fields -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          
+          <!-- LEFT SIDE: Editor Form Fields -->
+          <div class="space-y-5 bg-[#18181B] rounded-2xl border border-[#27272A] p-5">
+            <h3 class="text-xs font-bold uppercase text-stone-400 tracking-wider border-b border-[#27272A]/70 pb-2">Properties</h3>
+
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1">Question ID Key</label>
+                <input 
+                  type="text" 
+                  id="field-id" 
+                  oninput="updateActiveQuestionField('id', this.value)"
+                  class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                >
+              </div>
+
+              <div>
+                <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1">Points Allocation</label>
+                <input 
+                  type="number" 
+                  id="field-points" 
+                  oninput="updateActiveQuestionField('points', parseInt(this.value) || 0)"
+                  class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-bold"
+                >
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1 flex items-center justify-between">
+                <span>Prompt / Statement Text</span>
+                <span class="text-[8px] bg-neutral-900 px-1.5 py-0.5 rounded text-violet-400 font-mono">Supports LaTeX ($3x - 7 = 14$)</span>
+              </label>
+              <textarea 
+                id="field-prompt" 
+                oninput="updateActiveQuestionField('prompt', this.value)"
+                rows="6"
+                class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500 font-medium leading-relaxed resize-y"
+                placeholder="Enter prompt text here. Use single '$' for inline math like $x^2 = 4$ or double '$$' for styled blocks."
+              ></textarea>
+            </div>
+
+            <div>
+              <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1 flex items-center justify-between">
+                <span>Embedded Image URL</span>
+                <span class="text-[8px] text-[#A1A1AA]">e.g. /assets/graph_1.png</span>
+              </label>
+              <input 
+                type="text" 
+                id="field-image-url" 
+                oninput="updateActiveQuestionField('image_url', this.value)"
+                placeholder="Empty if no diagram or image is attached for this item."
+                class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+              >
+            </div>
+
+            <!-- MC ONLY Options Fields -->
+            <div id="mc-options-card" class="space-y-4 pt-3 border-t border-[#27272A]/70">
+              <h4 class="text-[11px] font-extrabold uppercase text-stone-400 tracking-wider">Multiple Choice Choices</h4>
+              
+              <div class="grid grid-cols-1 gap-2.5">
+                <div class="flex items-center gap-2">
+                  <span class="w-6 text-xs text-[#A1A1AA] font-mono font-bold text-center">A</span>
+                  <input 
+                    type="text" 
+                    id="field-opt-a" 
+                    oninput="updateOptionField('A', this.value)"
+                    placeholder="Option A Text"
+                    class="flex-1 bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-medium"
+                  >
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <span class="w-6 text-xs text-[#A1A1AA] font-mono font-bold text-center">B</span>
+                  <input 
+                    type="text" 
+                    id="field-opt-b" 
+                    oninput="updateOptionField('B', this.value)"
+                    placeholder="Option B Text"
+                    class="flex-1 bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-medium"
+                  >
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <span class="w-6 text-xs text-[#A1A1AA] font-mono font-bold text-center">C</span>
+                  <input 
+                    type="text" 
+                    id="field-opt-c" 
+                    oninput="updateOptionField('C', this.value)"
+                    placeholder="Option C Text"
+                    class="flex-1 bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-medium"
+                  >
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <span class="w-6 text-xs text-[#A1A1AA] font-mono font-bold text-center">D</span>
+                  <input 
+                    type="text" 
+                    id="field-opt-d" 
+                    oninput="updateOptionField('D', this.value)"
+                    placeholder="Option D Text"
+                    class="flex-1 bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-medium"
+                  >
+                </div>
+              </div>
+
+              <div class="pt-2">
+                <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1">Correct Choice Key</label>
+                <select 
+                  id="field-correct-mc" 
+                  onchange="updateActiveQuestionField('correct_mc', this.value)"
+                  class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 cursor-pointer font-bold"
+                >
+                  <option value="">-- Select Correct Choice --</option>
+                  <option value="A">Choice A</option>
+                  <option value="B">Choice B</option>
+                  <option value="C">Choice C</option>
+                  <option value="D">Choice D</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- FRQ ONLY Options Fields -->
+            <div id="frq-options-card" class="space-y-4 pt-3 border-t border-[#27272A]/70 hidden">
+              <div>
+                <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1 flex items-center justify-between">
+                  <span>Proctor Score Grading Rubric Guide</span>
+                  <span class="text-[8px] text-emerald-400 font-mono">Rubric</span>
+                </label>
+                <textarea 
+                  id="field-rubric" 
+                  oninput="updateActiveQuestionField('rubric_guide', this.value)"
+                  rows="4"
+                  class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-sans leading-relaxed text-stone-300 resize-none placeholder-stone-600"
+                  placeholder="Draft rubric points allocations for evaluations. E.g. 5 pts for formula setup. 5 pts for calculation correctness."
+                ></textarea>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- RIGHT SIDE: Live Preview of what the student sees -->
+          <div class="space-y-5">
+            <div class="flex items-center justify-between select-none">
+              <h3 class="text-xs font-black uppercase text-stone-400 tracking-wider flex items-center gap-1">
+                <i data-lucide="eye" class="w-3.5 h-3.5 text-[#10B981]"></i>
+                <span>Student Canvas Live Preview</span>
+              </h3>
+              <span class="text-[9px] bg-emerald-950 font-bold text-emerald-400 border border-emerald-900/40 px-2 py-0.5 rounded">
+                REAL-TIME AUTO-RENDER
+              </span>
+            </div>
+
+            <!-- Simulated student environment -->
+            <div class="bg-[#09090B] border border-[#27272A] rounded-2xl overflow-hidden shadow-2xl flex flex-col font-sans">
+              <!-- Top bar simulator -->
+              <div class="bg-[#18181B] px-4 py-2 flex items-center justify-between border-b border-[#27272A] select-none text-[10px] font-bold text-[#A1A1AA]">
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                  <span>Exam Workspace Active</span>
+                </div>
+                <span>Secured Panel</span>
+              </div>
+
+              <!-- Question Preview Body -->
+              <div class="p-6 space-y-5" id="student_workspace_preview">
+                
+                <!-- Tag row -->
+                <div class="flex items-center justify-between border-b border-[#27272A]/70 pb-3">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold text-violet-400 bg-violet-950/40 border border-violet-900/50 px-2.5 py-1 rounded" id="preview-q-badge-num">
+                      Question 1
+                    </span>
+                    <span class="text-stone-500 font-medium">|</span>
+                    <span class="text-xs text-stone-400 font-bold" id="preview-q-points">
+                      5 pts score budget
+                    </span>
+                  </div>
+                  
+                  <button class="flex items-center gap-1 bg-[#18181B] border border-[#27272A] text-stone-400 hover:text-white px-2 py-1 rounded text-[10px] font-bold cursor-not-allowed">
+                    <i data-lucide="flag" class="w-3 h-3 text-stone-500"></i> Flag Task
+                  </button>
+                </div>
+
+                <!-- Simulated Content Prompt text (KaTeX target) -->
+                <div class="space-y-4">
+                  <!-- Prompt content box -->
+                  <div class="text-sm md:text-base text-white leading-relaxed font-sans whitespace-pre-wrap select-text" id="preview-q-prompt">
+                    Analyze the statement y = mx + c.
+                  </div>
+
+                  <!-- Diagram image if any -->
+                  <div id="preview-q-image-container" class="hidden">
+                    <div class="bg-neutral-900 rounded-xl border border-neutral-800 p-2 overflow-hidden flex items-center justify-center max-h-[220px]">
+                      <img id="preview-q-image" src="" alt="Dynamic Question Attachment" class="object-contain max-h-[200px]" onerror="this.parentElement.parentElement.classList.add('hidden')">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- MC Choice buttons simulator -->
+                <div id="preview-mc-options-container" class="space-y-2 pt-3 select-none">
+                  <!-- Injected via renderer loop -->
+                </div>
+
+                <!-- FRQ textbox simulator -->
+                <div id="preview-frq-area-container" class="space-y-2 pt-3 select-none hidden">
+                  <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider">Candidate Response Input Editor</label>
+                  <textarea 
+                    rows="4" 
+                    placeholder="Enter your final response argument here... Formulating formulas or step setups using latex notation is supported."
+                    class="w-full bg-[#18181B] border border-[#27272A] rounded-xl px-4 py-3 text-xs md:text-sm text-stone-300 focus:outline-none focus:ring-1 focus:ring-violet-500 leading-relaxed resize-none cursor-text font-serif min-h-[100px]"
+                    disabled
+                  ></textarea>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </main>
+
+  </div>
+
+  <!-- Real time drag and drop setup script -->
+  <script>
+    // In-memory data model
+    let currentTest = {
+      test_id: "TEST_3",
+      event_name: "Mechanical Waves Lab",
+      duration: 40,
+      active: true,
+      instructions: "",
+      start_icon: "play",
+      questions: []
+    };
+
+    // Active UI states
+    let activeQuestionId = null;
+
+    // Default MC & FRQ templates
+    const mcTemplate = () => ({
+      id: "q_" + Math.random().toString(36).substr(2, 6),
+      number: 1,
+      type: "MC",
+      prompt: "State the velocity of sound in sea water ($15^\\circ C$ if the temperature fluctuates). Use standard wave formula.",
+      points: 5,
+      options: {
+        "A": "y = 1500 m/s",
+        "B": "y = 340 m/s",
+        "C": "y = 5200 m/s",
+        "D": "y = 1000 m/s"
+      },
+      correct_mc: "A",
+      image_url: ""
+    });
+
+    const frqTemplate = () => ({
+      id: "q_" + Math.random().toString(36).substr(2, 6),
+      number: 1,
+      type: "FRQ",
+      prompt: "A wave pulse has a peak coefficient described by particle oscillation wave $y(x,t) = A\\cos(kx - \\omega t)$. Prove that this wave satisfies the general standard wave partial differential equation:\n\n$$\\frac{\\partial^2 y}{\\partial x^2} = \\frac{1}{v^2} \\frac{\\partial^2 y}{\\partial t^2}$$",
+      points: 10,
+      rubric_guide: "Max 10 pts. 4 pts for second order partial with respect to space x (generates -k^2). 4 pts for second order partial with respect to time t (generates -omega^2). 2 pts for verifying correctness with substitution of omega/k = v.",
+      image_url: ""
+    });
+
+    // Run layout initializer on mount
+    window.addEventListener('DOMContentLoaded', () => {
+      // Seed initial questions if empty
+      currentTest.questions.push(mcTemplate());
+      currentTest.questions[0].number = 1;
+
+      // Fill initial core fields
+      document.getElementById('meta-id').value = currentTest.test_id;
+      document.getElementById('meta-name').value = currentTest.event_name;
+      document.getElementById('meta-instructions').value = currentTest.instructions;
+
+      // Select first question
+      activeQuestionId = currentTest.questions[0].id;
+
+      renderAll();
+
+      // Setup Drag and Drop logic
+      const dropTarget = document.getElementById('drop-target');
+      window.addEventListener('dragover', (e) => { e.preventDefault(); });
+      window.addEventListener('drop', handleFileDrop);
+
+      // File chooser event
+      document.getElementById('file-uploader').addEventListener('change', handleFileChoose);
+    });
+
+    function createNewTest() {
+      if(confirm("Are you sure you want to discard your current work and start a new test sheet?")) {
+        currentTest = {
+          test_id: "NEW_TEST_1",
+          event_name: "Mechanics Final",
+          duration: 30,
+          active: true,
+          instructions: "",
+          start_icon: "play",
+          questions: [mcTemplate()]
+        };
+        currentTest.questions[0].id = "q_1";
+        currentTest.questions[0].number = 1;
+        activeQuestionId = "q_1";
+
+        // reset core fields
+        document.getElementById('meta-id').value = currentTest.test_id;
+        document.getElementById('meta-name').value = currentTest.event_name;
+        document.getElementById('meta-instructions').value = currentTest.instructions;
+
+        renderAll();
+      }
+    }
+
+    // Core meta parameters modifications
+    function updateMeta(prop, val) {
+      currentTest[prop] = val;
+      renderAll();
+    }
+
+    // Question form field binding updates
+    function updateActiveQuestionField(field, val) {
+      if (!activeQuestionId) return;
+      const q = currentTest.questions.find(x => x.id === activeQuestionId);
+      if (!q) return;
+
+      q[field] = val;
+      
+      // If we are modifying ID of active question, make sure active ID references the new string
+      if (field === 'id') {
+        const checkExisting = currentTest.questions.filter(x => x.id === val);
+        if (checkExisting.length <= 1) { // no duplication collision
+          activeQuestionId = val;
+        }
+      }
+
+      renderAll();
+    }
+
+    function updateOptionField(optionKey, val) {
+      if (!activeQuestionId) return;
+      const q = currentTest.questions.find(x => x.id === activeQuestionId);
+      if (!q || q.type !== 'MC') return;
+
+      if (!q.options) q.options = {};
+      q.options[optionKey] = val;
+      renderAll();
+    }
+
+    function addQuestion(type) {
+      const q = type === 'MC' ? mcTemplate() : frqTemplate();
+      
+      // Assign highest number
+      const nextNum = currentTest.questions.length > 0
+        ? Math.max(...currentTest.questions.map(x => x.number)) + 1
+        : 1;
+      q.number = nextNum;
+      
+      currentTest.questions.push(q);
+      activeQuestionId = q.id;
+      renderAll();
+    }
+
+    function deleteSelectedQuestion() {
+      if (!activeQuestionId) return;
+      const index = currentTest.questions.findIndex(x => x.id === activeQuestionId);
+      if (index === -1) return;
+
+      currentTest.questions.splice(index, 1);
+      
+      // Re-index question sequence numbers
+      currentTest.questions.forEach((q, i) => {
+        q.number = i + 1;
+      });
+
+      if (currentTest.questions.length > 0) {
+        activeQuestionId = currentTest.questions[Math.max(0, index - 1)].id;
+      } else {
+        activeQuestionId = null;
+      }
+
+      renderAll();
+    }
+
+    function selectQuestion(qId) {
+      activeQuestionId = qId;
+      renderAll();
+    }
+
+    function moveSelectedQuestion(delta) {
+      if (!activeQuestionId) return;
+      const index = currentTest.questions.findIndex(x => x.id === activeQuestionId);
+      if (index === -1) return;
+
+      const target = index + delta;
+      if (target < 0 || target >= currentTest.questions.length) return;
+
+      // Swap positions
+      const temp = currentTest.questions[index];
+      currentTest.questions[index] = currentTest.questions[target];
+      currentTest.questions[target] = temp;
+
+      // Re-assign sequence numbers
+      currentTest.questions.forEach((q, i) => {
+        q.number = i + 1;
+      });
+
+      renderAll();
+    }
+
+    // Main Renderer
+    function renderAll() {
+      const qCount = currentTest.questions.length;
+      document.getElementById('total-questions-count').innerText = `${qCount} unique question` + (qCount !== 1 ? 's' : '');
+
+      // Render Sidebar Question buttons
+      const listRoot = document.getElementById('questions-list-root');
+      listRoot.innerHTML = '';
+
+      if (currentTest.questions.length === 0) {
+        listRoot.innerHTML = `
+          <div class="text-center py-6 text-[10px] text-stone-500 font-bold select-none border border-dashed border-[#27272A] rounded-xl">
+            No questions drafted yet
+          </div>
+        `;
+      } else {
+        currentTest.questions.forEach((q, idx) => {
+          const isActive = q.id === activeQuestionId;
+          const button = document.createElement('button');
+          button.className = `w-full text-left p-3 rounded-xl border transition-all flex items-start justify-between cursor-pointer group ${
+            isActive 
+              ? 'bg-[#27272A] border-violet-500 shadow-md font-semibold text-white' 
+              : 'bg-zinc-950 border-[#27272A] text-stone-400 hover:bg-[#18181B] hover:text-stone-200'
+          }`;
+          button.onclick = () => selectQuestion(q.id);
+
+          const promptSnippet = q.prompt ? (q.prompt.length > 38 ? q.prompt.substr(0, 38) + '...' : q.prompt) : 'Empty Prompt';
+          
+          button.innerHTML = `
+            <div class="flex items-start gap-2 max-w-[85%]">
+              <span class="font-mono text-[9px] px-1.5 py-0.5 rounded ${
+                isActive ? 'bg-violet-600 text-white' : 'bg-[#18181B] text-violet-400'
+              }">Q${idx + 1}</span>
+              <div class="space-y-0.5 min-w-0">
+                <p class="text-xs font-bold truncate ${isActive ? 'text-white' : 'text-stone-300'}">${promptSnippet}</p>
+                <span class="text-[9px] font-mono block ${isActive ? 'text-violet-300' : 'text-stone-500'}">
+                  Type: ${q.type} | ID: ${q.id}
+                </span>
+              </div>
+            </div>
+            <span class="text-[9px] font-mono shrink-0 py-0.5 font-bold ${isActive ? 'text-emerald-300' : 'text-[#10B981]'}">
+              ${q.points}p
+            </span>
+          `;
+          listRoot.appendChild(button);
+        });
+      }
+
+      // Render Editor Inputs form (if something is selected)
+      const editorPanel = document.getElementById('question-editor-panel');
+      const noQuestionSelected = document.getElementById('no-question-selected');
+
+      const qObj = currentTest.questions.find(x => x.id === activeQuestionId);
+
+      if (!qObj) {
+        editorPanel.classList.add('hidden');
+        noQuestionSelected.classList.remove('hidden');
+        return;
+      } else {
+        editorPanel.classList.remove('hidden');
+        noQuestionSelected.classList.add('hidden');
+      }
+
+      // Set editor field elements
+      document.getElementById('editor-q-num-badge').innerText = `Q${qObj.number}`;
+      document.getElementById('editor-q-type-label').innerText = qObj.type === 'MC' ? 'MULTIPLE CHOICE' : 'FREE RESPONSE / FRQ';
+      document.getElementById('editor-q-title').innerText = qObj.type === 'MC' ? 'Response Options Structure' : 'FRQ Evaluation Rubric';
+
+      document.getElementById('field-id').value = qObj.id || '';
+      document.getElementById('field-points').value = qObj.points || 0;
+      document.getElementById('field-prompt').value = qObj.prompt || '';
+      document.getElementById('field-image-url').value = qObj.image_url || '';
+
+      // Toggles MC vs FRQ parameters block
+      const mcBlock = document.getElementById('mc-options-card');
+      const frqBlock = document.getElementById('frq-options-card');
+
+      if (qObj.type === 'MC') {
+        mcBlock.classList.remove('hidden');
+        frqBlock.classList.add('hidden');
+        
+        // Fill options
+        const opts = qObj.options || {};
+        document.getElementById('field-opt-a').value = opts.A || '';
+        document.getElementById('field-opt-b').value = opts.B || '';
+        document.getElementById('field-opt-c').value = opts.C || '';
+        document.getElementById('field-opt-d').value = opts.D || '';
+        document.getElementById('field-correct-mc').value = qObj.correct_mc || '';
+      } else {
+        mcBlock.classList.add('hidden');
+        frqBlock.classList.remove('hidden');
+        document.getElementById('field-rubric').value = qObj.rubric_guide || '';
+      }
+
+      // --- RENDER LIVE CLIENT PREVIEW ENVIRONMENT ---
+      document.getElementById('preview-q-badge-num').innerText = `Question ${qObj.number}`;
+      document.getElementById('preview-q-points').innerText = `${qObj.points} pt${qObj.points !== 1 ? 's' : ''} score budget`;
+
+      // Draw HTML prompt text safety
+      const promptEl = document.getElementById('preview-q-prompt');
+      promptEl.innerText = qObj.prompt || 'Provide standard question prompt statement...';
+
+      // Load diagrams if URL matches
+      const previewImgCont = document.getElementById('preview-q-image-container');
+      const previewImg = document.getElementById('preview-q-image');
+      if (qObj.image_url) {
+        previewImg.src = qObj.image_url;
+        previewImgCont.classList.remove('hidden');
+      } else {
+        previewImg.src = '';
+        previewImgCont.classList.add('hidden');
+      }
+
+      const mcCont = document.getElementById('preview-mc-options-container');
+      const frqCont = document.getElementById('preview-frq-area-container');
+
+      if (qObj.type === 'MC') {
+        mcCont.classList.remove('hidden');
+        frqCont.classList.add('hidden');
+        
+        mcCont.innerHTML = '';
+        const opts = qObj.options || {};
+        const isCorrectKey = qObj.correct_mc || '';
+
+        ['A', 'B', 'C', 'D'].forEach(key => {
+          const optText = opts[key] || '';
+          if (optText.trim() !== '') {
+            const isTargetCorrect = key === isCorrectKey;
+            
+            const card = document.createElement('div');
+            card.className = `w-full text-left p-3.5 rounded-xl border text-xs md:text-sm transition-all flex items-center justify-between pointer-events-none select-none ${
+              isTargetCorrect 
+                ? 'bg-violet-950/20 border-violet-500/60 text-violet-200 font-semibold' 
+                : 'bg-[#18181B] border-[#27272A] text-stone-300'
+            }`;
+
+            card.innerHTML = `
+              <div class="flex items-center gap-3">
+                <span class="w-6 h-6 rounded-lg font-mono font-black border text-center flex items-center justify-center ${
+                  isTargetCorrect ? 'bg-violet-600 border-violet-400 text-white' : 'bg-[#09090B] border-[#27272A] text-stone-400'
+                }">${key}</span>
+                <span class="preview-katex-text-node">${optText}</span>
+              </div>
+              ${isTargetCorrect ? '<span class="text-[9px] uppercase font-mono font-black text-violet-400">CORRECT CHOICE</span>' : ''}
+            `;
+            mcCont.appendChild(card);
+          }
+        });
+
+        if (mcCont.children.length === 0) {
+          mcCont.innerHTML = `
+            <div class="text-center py-4 border border-dashed border-[#27272A] rounded-xl text-stone-500 text-xs">
+              No multiple choice options defined yet
+            </div>
+          `;
+        }
+
+      } else {
+        mcCont.classList.add('hidden');
+        frqCont.classList.remove('hidden');
+      }
+
+      // Initialize Lucide icons on newly rendered items
+      lucide.createIcons();
+
+      // Trigger KaTeX rendering on prompts and options
+      try {
+        renderMathInElement(document.getElementById('student_workspace_preview'), {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false },
+            { left: '\\(', right: '\\)', display: false },
+            { left: '\\[', right: '\\]', display: true }
+          ],
+          throwOnError: false
+        });
+      } catch (err) {
+        console.warn("KaTeX loading error:", err);
+      }
+    }
+
+    // Export payload to standalone compiled .json attachment in local browser downloads
+    function exportJSON() {
+      // Validate schema
+      if (!currentTest.test_id || currentTest.test_id.trim() === '') {
+        alert("Please specify a Unique Identifier ID for the test sheet before exporting.");
+        return;
+      }
+
+      // Pack it neatly matching server schema structural interfaces. No extra system elements.
+      const pack = {
+        test_id: currentTest.test_id.trim(),
+        event_name: currentTest.event_name.trim(),
+        duration: parseInt(currentTest.duration) || 30,
+        active: currentTest.active,
+        questions: currentTest.questions.map(q => {
+          const base = {
+            id: q.id,
+            number: parseInt(q.number),
+            type: q.type,
+            prompt: q.prompt,
+            points: parseInt(q.points) || 1
+          };
+          if (q.image_url && q.image_url.trim() !== '') {
+            base.image_url = q.image_url.trim();
+          }
+          if (q.type === 'MC') {
+            base.options = {
+              A: q.options?.A || '',
+              B: q.options?.B || '',
+              C: q.options?.C || '',
+              D: q.options?.D || ''
+            };
+            base.correct_mc = q.correct_mc || 'A';
+          } else {
+            base.rubric_guide = q.rubric_guide || '';
+          }
+          return base;
+        })
+      };
+
+      // Add pre-test metadata only if explicitly defined to avoid bloating simple schemas
+      if (currentTest.instructions && currentTest.instructions.trim() !== '') {
+        pack.instructions = currentTest.instructions.trim();
+      }
+      if (currentTest.start_icon && currentTest.start_icon !== 'play') {
+        pack.start_icon = currentTest.start_icon;
+      }
+
+      // Convert to blob and download
+      const content = JSON.stringify(pack, null, 2);
+      const blob = new Blob([content], { type: "application/json" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${currentTest.test_id}.json`;
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    // Handle uploaded test JSON files dynamically in client
+    function handleFileDrop(e) {
+      e.preventDefault();
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        parseAndLoadJSONFile(files[0]);
+      }
+    }
+
+    function handleFileChoose(e) {
+      const files = e.target.files;
+      if (files.length > 0) {
+        parseAndLoadJSONFile(files[0]);
+      }
+    }
+
+    function parseAndLoadJSONFile(file) {
+      if (!file.name.endsWith('.json')) {
+        alert("Incorrect file signature. Please select a .json configuration file.");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const parsed = JSON.parse(event.target.result);
+          if (!parsed.test_id || !parsed.event_name) {
+            alert("This JSON file doesn't match a standard LANtern Test schema. Make sure test_id and event_name exist.");
+            return;
+          }
+
+          // Convert parsed payload variables safely to currentTest
+          currentTest = {
+            test_id: parsed.test_id || "TEST_NEW",
+            event_name: parsed.event_name || "Imported Assessment",
+            duration: parsed.duration || 30,
+            active: parsed.active !== undefined ? parsed.active : true,
+            instructions: parsed.instructions || "",
+            start_icon: parsed.start_icon || "play",
+            questions: []
+          };
+
+          if (Array.isArray(parsed.questions)) {
+            parsed.questions.forEach((q, idx) => {
+              const item = {
+                id: q.id || "q_" + Math.random().toString(36).substr(2, 6),
+                number: q.number || (idx + 1),
+                type: q.type || "MC",
+                prompt: q.prompt || "",
+                points: q.points || 5,
+                image_url: q.image_url || ""
+              };
+
+              if (item.type === 'MC') {
+                item.options = q.options || { A: "", B: "", C: "", D: "" };
+                item.correct_mc = q.correct_mc || "A";
+              } else {
+                item.rubric_guide = q.rubric_guide || q.rubric || "";
+              }
+
+              currentTest.questions.push(item);
+            });
+          }
+
+          // Update forms UI input displays
+          document.getElementById('meta-id').value = currentTest.test_id;
+          document.getElementById('meta-name').value = currentTest.event_name;
+          document.getElementById('meta-instructions').value = currentTest.instructions;
+
+          // Activate first question if available
+          if (currentTest.questions.length > 0) {
+            activeQuestionId = currentTest.questions[0].id;
+          } else {
+            activeQuestionId = null;
+          }
+
+          renderAll();
+          alert(`Selected configuration imported successfully: ${currentTest.test_id} (${currentTest.questions.length} questions)`);
+
+        } catch (err) {
+          alert("Failed to parse JSON file structure. Verify the formatting and try again.");
+          console.error(err);
+        }
+      };
+      reader.readAsText(file);
+    }
+  </script>
+</body>
+</html>

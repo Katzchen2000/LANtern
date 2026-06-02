@@ -1,0 +1,8 @@
+{
+  "admin_hash": "",
+  "admin_salt": "",
+  "jwt_secret": "f06caac633b4390c2c1cb95d5a8988882858b1254eee1c5e105763ce992cea32",
+  "server_settings": {
+    "created_at": "2026-05-31T01:54:18.050Z"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "LANtern",
+  "description": "A fully offline LAN test server with Bluebook-inspired runner for students and a Bento Grid admin console for test and roster management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

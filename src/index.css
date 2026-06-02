@@ -1,0 +1,216 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@theme {
+  --color-background: #09090B;
+  --color-on-background: #FAFAFA;
+  
+  --color-surface: #18181B;
+  --color-surface-dim: #0E0E11;
+  --color-surface-bright: #27272A;
+  --color-surface-container-lowest: #020203;
+  --color-surface-container-low: #0F0F11;
+  --color-surface-container: #18181B;
+  --color-surface-container-high: #202024;
+  --color-surface-container-highest: #27272A;
+  --color-on-surface: #FAFAFA;
+  --color-[#FAFAFA]: #FAFAFA;
+  --color-on-surface-variant: #A1A1AA;
+  --color-inverse-surface: #FAFAFA;
+  --color-inverse-on-surface: #09090B;
+  --color-outline: #3F3F46;
+  --color-outline-variant: #27272A;
+  
+  --color-primary: #7C3AED;
+  --color-on-primary: #FAFAFA;
+  --color-primary-container: #6D28D9;
+  --color-on-primary-container: #FAFAFA;
+  
+  --color-secondary: #8B5CF6;
+  --color-on-secondary: #FAFAFA;
+  --color-secondary-container: #4C1D95;
+  --color-on-secondary-container: #F5F3FF;
+  
+  --color-success: #10B981;
+  --color-error: #EF4444;
+  --color-warning: #F59E0B;
+
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Merriweather", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+}
+
+/* Custom fonts pairing and focus settings */
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-background);
+    color: var(--color-on-background);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Custom interactive animation effects */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: .7;
+    transform: scale(1.03);
+  }
+}
+
+.pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Smooth custom transit selection transitions */
+::selection {
+  background-color: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+}
+
+/* Redesign mappings to convert any leftover light-mode classes to Dark Gamified system */
+.bg-white {
+  background-color: var(--color-surface) !important;
+}
+
+.text-\[\#1D1B20\] {
+  color: var(--color-on-surface) !important;
+}
+
+.text-\[\#49454F\] {
+  color: var(--color-on-surface-variant) !important;
+}
+
+.text-\[\#21005D\] {
+  color: #DDD6FE !important; /* light lavender text for dark mode */
+}
+
+.text-\[\#6750A4\] {
+  color: #A78BFA !important; /* light violet */
+}
+
+.bg-\[\#F3F4F9\] {
+  background-color: var(--color-surface-dim) !important;
+}
+
+.bg-\[\#FAF9FD\] {
+  background-color: var(--color-surface-dim) !important;
+}
+
+.bg-\[\#FAF9FD\]\/50 {
+  background-color: rgba(14, 14, 17, 0.45) !important;
+}
+
+.bg-\[\#FEF7FF\] {
+  background-color: var(--color-surface) !important;
+}
+
+.bg-\[\#F7F9FC\] {
+  background-color: var(--color-background) !important;
+}
+
+.border-\[\#CAC4D0\] {
+  border-color: var(--color-outline-variant) !important;
+}
+
+.divide-\[\#F4F4F4\] > * + * {
+  border-color: var(--color-outline-variant) !important;
+}
+
+.border-\[\#F4F4F4\] {
+  border-color: var(--color-outline-variant) !important;
+}
+
+.border-\[\#F4F4F4\]\/50 {
+  border-color: var(--color-outline-variant) !important;
+}
+
+.bg-\[\#6750A4\] {
+  background-color: var(--color-primary) !important;
+}
+
+.bg-\[\#6750A4\]\/10 {
+  background-color: rgba(124, 58, 237, 0.15) !important;
+  color: #C084FC !important;
+}
+
+.text-\[\#6750A4\] {
+  color: #C084FC !important;
+}
+
+.bg-\[\#EADDFF\] {
+  background-color: var(--color-secondary-container) !important;
+  color: var(--color-on-secondary-container) !important;
+}
+
+.text-\[\#21005D\]\/65 {
+  color: rgba(245, 243, 255, 0.65) !important;
+}
+
+.text-\[\#001D35\]\/65 {
+  color: rgba(245, 243, 255, 0.65) !important;
+}
+
+.text-\[\#410E0B\]\/65 {
+  color: rgba(245, 243, 255, 0.65) !important;
+}
+
+/* Fix option selections and active element inputs in tables */
+tr.hover\:bg-neutral-50:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+.hover\:bg-neutral-50:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+label.hover\:bg-neutral-50:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+button.hover\:bg-neutral-50:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+.hover\:bg-\[\#6750A4\]\/3:hover {
+  background-color: rgba(124, 58, 237, 0.05) !important;
+}
+
+.bg-\[\#E8DEF8\] {
+  background-color: var(--color-surface-dim) !important;
+  color: var(--color-primary) !important;
+}
+
+.text-\[\#21005D\] {
+  color: var(--color-primary) !important;
+}
+
+.bg-\[\#FAF9FD\] {
+  background-color: var(--color-surface-dim) !important;
+}
+
+/* Input custom cursor / autofill override on white */
+input {
+  color-scheme: dark;
+}
+
+select {
+  color-scheme: dark;
+  background-color: var(--color-surface) !important;
+  color: var(--color-on-surface) !important;
+  border-color: var(--color-outline-variant) !important;
+}
+
+option {
+  background-color: var(--color-surface-dim) !important;
+  color: var(--color-on-surface) !important;
+}
+
+textarea {
+  color-scheme: dark;
+}
