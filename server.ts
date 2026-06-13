@@ -101,6 +101,80 @@ function verifyPassword(password: string, hash: string, salt: string): boolean {
   return testHash === hash;
 }
 
+// Gemini API Quota Usage and Tracking Helpers
+function estimateFrqTokens(item: { prompt?: string; rubric_guide?: string; student_response?: string }) {
+  const promptWords = (item.prompt || '').trim().split(/\s+/).filter(Boolean).length;
+  const rubricWords = (item.rubric_guide || '').trim().split(/\s+/).filter(Boolean).length;
+  const responseWords = (item.student_response || '').trim().split(/\s+/).filter(Boolean).length;
+  
+  const totalWords = promptWords + rubricWords + responseWords;
+  
+  // Standard scholastic rubric prompt boilerplate + system instruction overhead in tokens
+  const estimatedInputTokens = Math.ceil(totalWords * 1.35) + 600;
+  
+  // Typical output Qualitative commentary + score JSON structure in tokens
+  const estimatedOutputTokens = 300;
+  
+  return Math.max(800, estimatedInputTokens + estimatedOutputTokens);
+}
+
+async function getGeminiUsageStats() {
+  const todayStr = new Date().toLocaleDateString('en-US'); // Day-based safe reset comparison
+  const usage = await readJsonSafe<any>('data/gemini-usage.json', { quota_limit: 1500000, used_count: 0, last_reset_date: todayStr });
+  let quota_limit = usage.quota_limit || 1500000;
+  let used_count = usage.used_count || 0;
+  
+  // Daily reset check
+  if (usage.last_reset_date !== todayStr) {
+    used_count = 0;
+    usage.used_count = 0;
+    usage.last_reset_date = todayStr;
+    await writeJsonAtomic('data/gemini-usage.json', usage).catch(() => {});
+  }
+  
+  // Backwards-compatibility check: migrate old smaller quotas to 1.5M tokens
+  if (quota_limit <= 150000) {
+    quota_limit = 1500000;
+    used_count = used_count === 0 ? 0 : Math.min(used_count * 10, 1490000);
+    usage.quota_limit = quota_limit;
+    usage.used_count = used_count;
+    await writeJsonAtomic('data/gemini-usage.json', usage).catch(() => {});
+  }
+  
+  const left = Math.max(0, quota_limit - used_count);
+  return {
+    quota_limit,
+    used_count,
+    left,
+    estimated_frqs_left: Math.floor(left / 1500) // Assume 1,500 tokens / FRQ on average
+  };
+}
+
+async function recordGeminiUsage(count = 1500) {
+  try {
+    const todayStr = new Date().toLocaleDateString('en-US');
+    const usage = await readJsonSafe<any>('data/gemini-usage.json', { quota_limit: 1500000, used_count: 0, last_reset_date: todayStr });
+    let quota_limit = usage.quota_limit || 1500000;
+    let used_count = usage.used_count || 0;
+
+    // Daily reset check on write
+    if (usage.last_reset_date !== todayStr) {
+      used_count = 0;
+      usage.last_reset_date = todayStr;
+    }
+
+    if (quota_limit <= 150000) {
+      quota_limit = 1500000;
+      used_count = used_count === 0 ? 0 : Math.min(used_count * 10, 1490000);
+      usage.quota_limit = quota_limit;
+    }
+    usage.used_count = used_count + count;
+    await writeJsonAtomic('data/gemini-usage.json', usage);
+  } catch (e) {
+    console.error('Error recording gemini usage:', e);
+  }
+}
+
 // JWT-like simple tokens using crypto HMAC
 function signToken(payload: any, secret: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -803,7 +877,14 @@ async function startServer() {
       if (isConfigured) {
         masked = key.length > 8 ? `${key.substring(0, 4)}••••••••${key.substring(key.length - 4)}` : '••••••••';
       }
-      res.json({ is_configured: isConfigured, masked_key: masked });
+      const stats = await getGeminiUsageStats();
+      res.json({
+        is_configured: isConfigured,
+        masked_key: masked,
+        gemini_usage_left: stats.left,
+        gemini_quota_limit: stats.quota_limit,
+        estimated_frqs_left: stats.estimated_frqs_left
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -868,6 +949,44 @@ async function startServer() {
     }
   });
 
+  async function performStressCleanup() {
+    try {
+      // 1. Clean up from data/sessions/
+      const sessionFiles = await fs.readdir('data/sessions').catch(() => []);
+      for (const sf of sessionFiles) {
+        if (sf.startsWith('stress_') || sf.endsWith('.tmp')) {
+          await fs.unlink(path.join('data/sessions', sf)).catch(() => {});
+        }
+      }
+
+      // 2. Clean up from data/results/
+      const resultDirs = await fs.readdir('data/results').catch(() => []);
+      for (const dir of resultDirs) {
+        const dirPath = path.join('data/results', dir);
+        const stats = await fs.stat(dirPath).catch(() => null);
+        if (stats && stats.isDirectory()) {
+          const files = await fs.readdir(dirPath).catch(() => []);
+          for (const file of files) {
+            if (file.startsWith('stress_') || file.endsWith('.tmp')) {
+              await fs.unlink(path.join(dirPath, file)).catch(() => {});
+            }
+          }
+          
+          // If the directory of the test became empty, delete it
+          const remaining = await fs.readdir(dirPath).catch(() => []);
+          if (remaining.length === 0) {
+            await fs.rmdir(dirPath).catch(() => {});
+          }
+        }
+      }
+
+      // 3. Clean up from tests if stress_test_blueprint was created
+      await fs.unlink('tests/stress_test_blueprint.json').catch(() => {});
+    } catch (err) {
+      console.error('Error during stress cleanup:', err);
+    }
+  }
+
   // Concurrent stress simulator endpoint simulating concurrent student saves and submits
   app.post('/api/admin/simulate-stress', adminAuthMiddleware, async (req, res) => {
     try {
@@ -875,6 +994,9 @@ async function startServer() {
       
       const count = Math.min(Math.max(1, Number(students_count) || 200), 500); // Dynamic sanity limits
       const limit = Math.min(Math.max(1, Number(concurrency_limit) || 20), 50);
+
+      // Clean up any old stress runs before starting
+      await performStressCleanup();
 
       const testFiles = await fs.readdir('tests').catch(() => []);
       const jsonTests = testFiles.filter(f => f.endsWith('.json'));
@@ -996,16 +1118,10 @@ async function startServer() {
       const submitTime = Date.now() - submitStart;
       const totalDuration = Date.now() - startTime;
 
-      // Cleanup files immediately to avoid cluttering local DB index metrics
-      for (const sessionId of sessionsCreated) {
-        await fs.unlink(`data/sessions/${sessionId}.json`).catch(() => {});
-        const studentId = sessionId.replace('stress_sess_', '');
-        await fs.unlink(`data/results/${testId}-${studentId}.json`).catch(() => {});
-      }
-      
-      if (testId === 'stress_test_blueprint') {
-        await fs.unlink(`tests/${testId}.json`).catch(() => {});
-      }
+      // Cleanup files immediately using the comprehensive cleanup helper
+      await performStressCleanup();
+
+      const stats = await getGeminiUsageStats();
 
       res.json({
         success: true,
@@ -1021,7 +1137,11 @@ async function startServer() {
           saves_failed: saveErrors,
           submits_successful: submitCount,
           submits_failed: submitErrors,
-          throughput_req_per_sec: Math.round((count * 3) / (totalDuration / 1000 || 1))
+          throughput_req_per_sec: Math.round((count * 3) / (totalDuration / 1000 || 1)),
+          responses_graded_per_sec: parseFloat((submitCount / (submitTime / 1000 || 1)).toFixed(2)),
+          gemini_usage_left: stats.left,
+          gemini_quota_limit: stats.quota_limit,
+          estimated_frqs_left: stats.estimated_frqs_left
         }
       });
     } catch (e: any) {
@@ -1211,6 +1331,7 @@ async function startServer() {
         total_score: resultObj?.total_score || 0,
         total_possible: resultObj?.total_possible || test?.questions?.reduce((acc, q) => acc + q.points, 0) || 0,
         submitted_at: session.submitted_at || session.expires_at,
+        infraction_count: session.infraction_count || 0,
         questions: questionsWithGrades,
         responses: responses
       });
@@ -1356,11 +1477,20 @@ async function startServer() {
           if (sf.endsWith('.json')) {
             const sess = await readJsonSafe<Session>(`data/sessions/${sf}`, null);
             if (sess && sess.status === 'in_progress') {
-              sessionsOnDisk[sess.student_id] = {
-                session_id: sess.session_id,
-                infraction_count: sess.infraction_count || 0,
-                expires_at: sess.expires_at
-              };
+              const hasExp = new Date() > new Date(sess.expires_at);
+              if (hasExp) {
+                // Auto-submit stale expired session on the fly
+                sess.status = 'auto_submitted';
+                sess.submitted_at = new Date().toISOString();
+                await writeJsonAtomic(`data/sessions/${sess.session_id}.json`, sess);
+                await evaluateAndSaveResult(sess);
+              } else {
+                sessionsOnDisk[sess.student_id] = {
+                  session_id: sess.session_id,
+                  infraction_count: sess.infraction_count || 0,
+                  expires_at: sess.expires_at
+                };
+              }
             }
           }
         }
@@ -1455,19 +1585,75 @@ async function startServer() {
   // Reset Session
   app.post('/api/admin/sessions/:id/reset', adminAuthMiddleware, async (req, res) => {
     const sessionId = req.params.id;
-    const session = await readJsonSafe<Session>(`data/sessions/${sessionId}.json`, null);
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
+    const { test_id, student_id } = req.body || {};
+    
+    // Read the session details if possible
+    let session: Session | null = null;
+    if (sessionId && sessionId !== 'undefined') {
+      session = await readJsonSafe<Session>(`data/sessions/${sessionId}.json`, null);
     }
-    // Delete session file
-    try {
-      await fs.unlink(`data/sessions/${sessionId}.json`);
-    } catch (e) {}
+    
+    // Determine target test and student
+    let deleteTestId = session?.test_id || test_id;
+    let deleteStudentId = session?.student_id || student_id;
 
-    // Also remove graded result safely
-    try {
-      await fs.unlink(`data/results/${session.test_id}/${session.student_id}.json`);
-    } catch(e) {}
+    // If we still don't have student/test ID, but we do have a sessionId, try to find it by scanning existing sessions
+    if ((!deleteTestId || !deleteStudentId) && sessionId && sessionId !== 'undefined') {
+      try {
+        const sFiles = await fs.readdir('data/sessions').catch(() => []);
+        for (const sf of sFiles) {
+          if (sf.endsWith('.json')) {
+            const tempSess = await readJsonSafe<Session>(`data/sessions/${sf}`, null);
+            if (tempSess && tempSess.session_id === sessionId) {
+              deleteTestId = tempSess.test_id;
+              deleteStudentId = tempSess.student_id;
+              break;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Now, delete the specific sessionId file if it is specified
+    if (sessionId && sessionId !== 'undefined') {
+      try {
+        await fs.unlink(`data/sessions/${sessionId}.json`).catch(() => {});
+      } catch (e) {}
+    }
+
+    // If we have test_id and student_id, search data/sessions/ and delete ANY session files matching this student and test
+    if (deleteTestId && deleteStudentId) {
+      try {
+        const sFiles = await fs.readdir('data/sessions').catch(() => []);
+        for (const sf of sFiles) {
+          if (sf.endsWith('.json')) {
+            const tempSess = await readJsonSafe<Session>(`data/sessions/${sf}`, null);
+            if (tempSess && tempSess.student_id === deleteStudentId && tempSess.test_id === deleteTestId) {
+              await fs.unlink(`data/sessions/${sf}`).catch(() => {});
+            }
+          }
+        }
+      } catch (e) {}
+
+      // Delete results file
+      try {
+        await fs.unlink(`data/results/${deleteTestId}/${deleteStudentId}.json`).catch(() => {});
+      } catch (e) {}
+    } else if (sessionId && sessionId !== 'undefined') {
+      // Fallback: If we only have session_id but couldn't resolve test/student IDs, scan results folders to find result with matching session_id
+      try {
+        const testDirs = await fs.readdir('data/results').catch(() => []);
+        for (const tid of testDirs) {
+          const files = await fs.readdir(`data/results/${tid}`).catch(() => []);
+          for (const f of files) {
+            const r = await readJsonSafe<Result>(`data/results/${tid}/${f}`, null);
+            if (r && r.session_id === sessionId) {
+              await fs.unlink(`data/results/${tid}/${f}`).catch(() => {});
+            }
+          }
+        }
+      } catch (e) {}
+    }
 
     res.json({ success: true });
   });
@@ -1660,6 +1846,11 @@ async function startServer() {
         return res.json({ success: true, graded_count: 0, message: 'All pending essay responses are already graded.' });
       }
 
+      let stats = await getGeminiUsageStats();
+      if (stats.left <= 0) {
+        return res.status(400).json({ error: `Your simulated Gemini daily token budget is fully depleted (0 tokens left). Grading paused. Under simulation guidelines, this budget resets automatically tomorrow. Alternatively, you can override the limits.` });
+      }
+
       const ai = new GoogleGenAI({
         apiKey: process.env.GEMINI_API_KEY,
         httpOptions: {
@@ -1670,82 +1861,118 @@ async function startServer() {
       });
 
       let gradedCount = 0;
+      let limitHitMessage = '';
       
-      const batchPromises = pendingItems.map(async (item) => {
-        try {
-          const response = await ai.models.generateContent({
-            model: "gemini-3.5-flash",
-            contents: `
-              Core Essay Prompt: "${item.prompt}"
-              Rubric Guide Criteria: "${item.rubric_guide}"
-              Max Points Possible: ${item.points}
-
-              Student Response Draft:
-              """
-              ${item.student_response}
-              """
-            `,
-            config: {
-              systemInstruction: "You are a professional AI test grader. Evaluate the student response against the rubric, scoring from 0 up to max points. Provide a short helpful qualitative note of feedback. Output strictly valid JSON.",
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  score: {
-                    type: Type.NUMBER,
-                    description: "Awarded points score. Must be between 0 and max points."
-                  },
-                  notes: {
-                    type: Type.STRING,
-                    description: "Feedback critique or reason."
-                  }
-                },
-                required: ["score", "notes"]
-              }
-            }
-          });
-
-          const rawText = response.text ? response.text.trim() : '';
-          if (rawText) {
-            let cleanText = rawText;
-            if (cleanText.startsWith('```')) {
-              cleanText = cleanText.replace(/^```json\n/, '').replace(/^```\n/, '').replace(/\n```$/, '');
-            }
-            const aiResult = JSON.parse(cleanText);
-            let score = Math.max(0, Math.min(item.points, Number(aiResult.score || 0)));
-            let notes = aiResult.notes || 'Graded by AI.';
-
-            // Safely write the grade using atomic read-modify-write updater
-            await updateJsonSafe<Result>(item.resultPath, (resObj) => {
-              if (resObj) {
-                resObj.frq_grades = resObj.frq_grades || {};
-                resObj.frq_grades[item.qId] = {
-                  score,
-                  notes: `[AI Autograde] ${notes}`
-                };
-
-                // Recalculate sums
-                let frqScoreSum = 0;
-                Object.values(resObj.frq_grades).forEach((f: any) => {
-                  frqScoreSum += f.score;
-                });
-
-                resObj.frq_score = frqScoreSum;
-                resObj.total_score = resObj.mc_score + frqScoreSum;
-              }
-              return resObj;
-            }, null as any);
-            
-            gradedCount++;
-          }
-        } catch (err) {
-          console.error('Error autograding item:', err);
+      // Control concurrency to avoid hitting Gemini rate limits (429) when grading bulk submissions
+      const chunkSize = 4;
+      for (let i = 0; i < pendingItems.length; i += chunkSize) {
+        const statsNow = await getGeminiUsageStats();
+        if (statsNow.left <= 0) {
+          limitHitMessage = 'Daily simulated token limit reached. Remaining items were paused.';
+          break;
         }
+
+        const batch = pendingItems.slice(i, i + chunkSize);
+        await Promise.all(batch.map(async (item) => {
+          try {
+            const checkStats = await getGeminiUsageStats();
+            const tokenEstimate = estimateFrqTokens(item);
+            if (checkStats.left < tokenEstimate) {
+              limitHitMessage = `Simulated daily token quota reached (${checkStats.left.toLocaleString()} left, required ~${tokenEstimate.toLocaleString()}). Evaluation paused.`;
+              return;
+            }
+
+            const response = await ai.models.generateContent({
+              model: "gemini-3.5-flash",
+              contents: `
+                Core Essay Prompt: "${item.prompt}"
+                Rubric Guide Criteria: "${item.rubric_guide}"
+                Max Points Possible: ${item.points}
+
+                Student Response Draft:
+                """
+                ${item.student_response}
+                """
+              `,
+              config: {
+                systemInstruction: "You are a professional AI test grader. Evaluate the student response against the rubric, scoring from 0 up to max points. Provide a short helpful qualitative note of feedback. Output strictly valid JSON.",
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    score: {
+                      type: Type.NUMBER,
+                      description: "Awarded points score. Must be between 0 and max points."
+                    },
+                    notes: {
+                      type: Type.STRING,
+                      description: "Feedback critique or reason."
+                    }
+                  },
+                  required: ["score", "notes"]
+                }
+              }
+            });
+
+            const rawText = response.text ? response.text.trim() : '';
+            if (rawText) {
+              let cleanText = rawText;
+              if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```json\n/, '').replace(/^```\n/, '').replace(/\n```$/, '');
+              }
+              const aiResult = JSON.parse(cleanText);
+              let score = Math.max(0, Math.min(item.points, Number(aiResult.score || 0)));
+              let notes = aiResult.notes || 'Graded by AI.';
+
+              // Safely write the grade using atomic read-modify-write updater
+              await updateJsonSafe<Result>(item.resultPath, (resObj) => {
+                if (resObj) {
+                  resObj.frq_grades = resObj.frq_grades || {};
+                  resObj.frq_grades[item.qId] = {
+                    score,
+                    notes: `[AI Autograde] ${notes}`
+                  };
+
+                  // Recalculate sums
+                  let frqScoreSum = 0;
+                  Object.values(resObj.frq_grades).forEach((f: any) => {
+                    frqScoreSum += f.score;
+                  });
+
+                  resObj.frq_score = frqScoreSum;
+                  resObj.total_score = resObj.mc_score + frqScoreSum;
+                }
+                return resObj;
+              }, null as any);
+              
+              const tokensForThisFrq = estimateFrqTokens(item);
+              await recordGeminiUsage(tokensForThisFrq);
+              gradedCount++;
+            }
+          } catch (err) {
+            console.error('Error autograding item:', err);
+          }
+        }));
+
+        if (limitHitMessage) {
+          break;
+        }
+
+        // Give a breath period between batches for rate safety
+        if (i + chunkSize < pendingItems.length) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+
+      const finalStats = await getGeminiUsageStats();
+      res.json({
+        success: true,
+        graded_count: gradedCount,
+        message: limitHitMessage || `Successfully evaluated ${gradedCount} short essay response(s) with Gemini AI.`,
+        gemini_usage_left: finalStats.left,
+        gemini_quota_limit: finalStats.quota_limit,
+        estimated_frqs_left: finalStats.estimated_frqs_left
       });
-
-      await Promise.all(batchPromises);
-
-      res.json({ success: true, graded_count: gradedCount });
     } catch (error: any) {
       console.error(error);
       res.status(500).json({ error: error.message });
@@ -2091,8 +2318,20 @@ async function startServer() {
           for (const rawFile of files) {
             if (rawFile.endsWith('.json')) {
               const sess = await readJsonSafe<Session>(`data/sessions/${rawFile}`, null);
-              if (sess && sess.student_id === sId && sess.test_id === testId && sess.status === 'in_progress') {
-                inProgressSessionId = sess.session_id;
+              if (sess && sess.student_id === sId && sess.test_id === testId) {
+                if (sess.status === 'in_progress') {
+                  const hasExp = new Date() > new Date(sess.expires_at);
+                  if (hasExp) {
+                    // Auto-submit stale expired session on the fly
+                    sess.status = 'auto_submitted';
+                    sess.submitted_at = new Date().toISOString();
+                    await writeJsonAtomic(`data/sessions/${sess.session_id}.json`, sess);
+                    await evaluateAndSaveResult(sess);
+                    isCompleted = true; // Since the results file is now generated on disk!
+                  } else {
+                    inProgressSessionId = sess.session_id;
+                  }
+                }
                 break;
               }
             }
@@ -2330,92 +2569,114 @@ async function startServer() {
 
   // Student Manual Submission
   app.post('/api/student/session/:id/submit', async (req, res) => {
-    const sessionId = req.params.id;
-    const cookies = parseCookies(req);
-    const config = await retrieveConfig();
+    try {
+      const sessionId = req.params.id;
+      const cookies = parseCookies(req);
+      const config = await retrieveConfig();
 
-    const studentSessToken = cookies['student_session_token'];
-    if (!studentSessToken) {
-      return res.status(401).json({ error: 'Auth credentials missing.' });
+      const studentSessToken = cookies['student_session_token'];
+      if (!studentSessToken) {
+        console.error('Manual submit failed: missing student_session_token cookie');
+        return res.status(401).json({ error: 'Auth credentials missing. Please refresh and try again.' });
+      }
+      
+      const sPl = verifyToken(studentSessToken, config.jwt_secret);
+      if (!sPl || sPl.session_id !== sessionId) {
+        console.error(`Manual submit failed: session payload verification failed or mismatched for ${sessionId}`);
+        return res.status(403).json({ error: 'Action denied. Invalid identity payload.' });
+      }
+
+      const session = await readJsonSafe<Session>(`data/sessions/${sessionId}.json`, null);
+      if (!session) {
+        console.error(`Manual submit failed: session file data/sessions/${sessionId}.json not found`);
+        return res.status(404).json({ error: 'Session not found on disk. Please contact your test supervisor.' });
+      }
+
+      if (session.status !== 'in_progress') {
+        console.warn(`Manual submit: session ${sessionId} is already in status '${session.status}'`);
+        // If it's already submitted or completed, we consider that a success to prevent blocking the interface
+        res.clearCookie('student_session_token');
+        return res.json({ success: true, message: 'Test already submitted previously.' });
+      }
+
+      const hasExpired = new Date() > new Date(session.expires_at);
+      session.status = hasExpired ? 'auto_submitted' : 'submitted';
+      session.submitted_at = new Date().toISOString();
+
+      await writeJsonAtomic(`data/sessions/${sessionId}.json`, session);
+
+      // Eval and save results state
+      await evaluateAndSaveResult(session);
+
+      // Clear submission session cookie
+      res.clearCookie('student_session_token');
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Core manual submit endpoint error:', err);
+      res.status(500).json({ error: err.message || 'An error occurred during submission.' });
     }
-    const sPl = verifyToken(studentSessToken, config.jwt_secret);
-    if (!sPl || sPl.session_id !== sessionId) {
-      return res.status(403).json({ error: 'Action denied. Invalid identity.' });
-    }
-
-    const session = await readJsonSafe<Session>(`data/sessions/${sessionId}.json`, null);
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found.' });
-    }
-
-    if (session.status !== 'in_progress') {
-      return res.status(400).json({ error: 'Test already submitted.' });
-    }
-
-    const hasExpired = new Date() > new Date(session.expires_at);
-    session.status = hasExpired ? 'auto_submitted' : 'submitted';
-    session.submitted_at = new Date().toISOString();
-
-    await writeJsonAtomic(`data/sessions/${sessionId}.json`, session);
-
-    // Eval and save results state
-    await evaluateAndSaveResult(session);
-
-    // Clear submission session cookie
-    res.clearCookie('student_session_token');
-    res.json({ success: true });
   });
 
   // Email notifications are now dispatched strictly on manual supervisor actions.
 
   // Helper evaluator & scoring engine
   async function evaluateAndSaveResult(session: Session) {
-    const test = await readJsonSafe<Test>(`tests/${session.test_id}.json`, null);
-    if (!test) return;
-
-    let mcScore = 0;
-    let mcTotal = 0;
-    let frqTotal = 0;
-
-    const questions = test.questions || [];
-    for (const q of questions) {
-      if (q.type === 'MC') {
-        mcTotal += q.points;
-        const studentAns = session.answers[q.id]?.selected_mc;
-        if (studentAns && q.correct_mc && studentAns.trim().toUpperCase() === q.correct_mc.trim().toUpperCase()) {
-          mcScore += q.points;
-        }
-      } else {
-        frqTotal += q.points;
+    try {
+      const test = await readJsonSafe<Test>(`tests/${session.test_id}.json`, null);
+      if (!test) {
+        console.error(`Scoring evaluation failed: test ${session.test_id} not found`);
+        return;
       }
+
+      let mcScore = 0;
+      let mcTotal = 0;
+      let frqTotal = 0;
+
+      const questions = test.questions || [];
+      const answersObj = session.answers || {};
+      for (const q of questions) {
+        if (q.type === 'MC') {
+          mcTotal += q.points;
+          const studentAns = answersObj[q.id]?.selected_mc;
+          if (studentAns && q.correct_mc && studentAns.trim().toUpperCase() === q.correct_mc.trim().toUpperCase()) {
+            mcScore += q.points;
+          }
+        } else {
+          frqTotal += q.points;
+        }
+      }
+
+      // Preserve existing grades if we are re-submitting or overriding
+      const resultPath = `data/results/${session.test_id}/${session.student_id}.json`;
+      const existingResult = await readJsonSafe<Result>(resultPath, null);
+      const frqGrades = existingResult?.frq_grades || {};
+      let frqScore = 0;
+      Object.values(frqGrades).forEach(g => {
+        frqScore += g.score;
+      });
+
+      const result: Result = {
+        student_id: session.student_id,
+        test_id: session.test_id,
+        session_id: session.session_id,
+        submitted_at: session.submitted_at || new Date().toISOString(),
+        mc_score: mcScore,
+        mc_total: mcTotal,
+        frq_grades: frqGrades,
+        frq_score: frqScore,
+        frq_total: frqTotal,
+        total_score: mcScore + frqScore,
+        total_possible: mcTotal + frqTotal,
+        infraction_count: session.infraction_count || 0
+      };
+
+      await fs.mkdir(`data/results/${session.test_id}`, { recursive: true }).catch(() => {});
+      await writeJsonAtomic(resultPath, result);
+      console.log(`Saved graded result successfully for Student ${session.student_id}, Test ${session.test_id}`);
+    } catch (err) {
+      console.error('Error in evaluateAndSaveResult execution:', err);
+      throw err;
     }
-
-    // Preserve existing grades if we are re-submitting or overriding
-    const resultPath = `data/results/${session.test_id}/${session.student_id}.json`;
-    const existingResult = await readJsonSafe<Result>(resultPath, null);
-    const frqGrades = existingResult?.frq_grades || {};
-    let frqScore = 0;
-    Object.values(frqGrades).forEach(g => {
-      frqScore += g.score;
-    });
-
-    const result: Result = {
-      student_id: session.student_id,
-      test_id: session.test_id,
-      session_id: session.session_id,
-      submitted_at: session.submitted_at || new Date().toISOString(),
-      mc_score: mcScore,
-      mc_total: mcTotal,
-      frq_grades: frqGrades,
-      frq_score: frqScore,
-      frq_total: frqTotal,
-      total_score: mcScore + frqScore,
-      total_possible: mcTotal + frqTotal,
-      infraction_count: session.infraction_count || 0
-    };
-
-    await writeJsonAtomic(resultPath, result);
-    console.log(`Saved graded result for Student ${session.student_id}, Test ${session.test_id}`);
   }
 
   // Trigger auto submission for stale expired sessions

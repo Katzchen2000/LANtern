@@ -28,7 +28,7 @@ export const LatexRenderer: React.FC<LatexRendererProps> = ({ text = '', classNa
           return (
             <div
               key={index}
-              className="py-3 px-4 my-2 overflow-x-auto bg-black/10 rounded-xl max-w-full text-center"
+              className="py-3 px-4 my-2 overflow-x-auto bg-black/10 rounded-sm max-w-full text-center"
               dangerouslySetInnerHTML={{ __html: html }}
             />
           );

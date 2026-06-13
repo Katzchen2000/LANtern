@@ -67,6 +67,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
     try {
       const res = await fetch('/api/student/me');
       if (res.ok) {
+        console.log("[LANtern] Submission success 200 OK");
         const data = await res.json();
         setAssignments(data.assignments || []);
         if (data.lan_ip) {
@@ -187,10 +188,10 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
         launchSession(data.session_id);
       } else {
         const errorData = await res.json();
-        alert(errorData.error || 'Failed to initialize session.');
+        setErrorMessage(errorData.error || 'Failed to initialize session.');
       }
     } catch (e) {
-      alert('Error connecting to Server.');
+      setErrorMessage('Error connecting to Server.');
     }
   };
 
@@ -222,7 +223,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
         setIsDoneScreen(data.session.status !== 'in_progress');
       }
     } catch (e) {
-      alert('Failed to load session content.');
+      setErrorMessage('Failed to load session content.');
     }
   };
 
@@ -329,11 +330,13 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
     }
   };
 
-  const handleManualSubmit = async () => {
+  
+  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const performSubmit = async () => {
+    console.log("[LANtern] Attempting performSubmit... for session:", activeSessionId);
     if (!activeSessionId) return;
-    if (!confirm('Are you absolutely sure you want to finish and submit your test now? This action cannot be undone.')) {
-      return;
-    }
     
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
@@ -347,12 +350,48 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
         localStorage.removeItem(`backup_session_${activeSessionId}`);
         setIsDoneScreen(true);
         setIsNavDrawerOpen(false);
+        setShowSubmitConfirm(false);
       } else {
-        alert('Failed to submit, please contact your test supervisor.');
+        const errorData = await res.json().catch(() => ({}));
+        setErrorMessage(errorData.error ? `Failed to submit: ${errorData.error}` : 'Failed to submit, please contact your test supervisor.');
+        setShowSubmitConfirm(false);
       }
     } catch (e) {
-      alert('Error contacting server during submission.');
+      setErrorMessage('Error contacting server during submission.');
+      setShowSubmitConfirm(false);
     }
+  };
+
+  const renderModals = () => (
+    <>
+      {showSubmitConfirm && (
+        <div className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-[#18181B] border border-solid border-[var(--color-outline-variant)] rounded-sm p-6 w-full max-w-sm">
+            <h3 className="text-white font-bold text-lg mb-2">Confirm Submission</h3>
+            <p className="text-[#A1A1AA] text-sm mb-6">Are you absolutely sure you want to finish and submit your test now? This action cannot be undone.</p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setShowSubmitConfirm(false)} className="px-4 py-2 font-semibold text-[#A1A1AA] hover:bg-white/5 rounded-sm text-sm">Cancel</button>
+              <button onClick={performSubmit} className="px-4 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-on-primary-container)] font-semibold text-[var(--color-on-primary)] rounded-sm text-sm">Yes, Submit Test</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {errorMessage && (
+        <div className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-[#18181B] border border-solid border-red-900/50 rounded-sm p-6 w-full max-w-sm">
+            <h3 className="text-red-400 font-bold text-lg mb-2">System Error</h3>
+            <p className="text-[#A1A1AA] text-sm mb-6">{errorMessage}</p>
+            <div className="flex justify-end">
+              <button onClick={() => setErrorMessage(null)} className="px-4 py-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 font-semibold rounded-sm text-sm">Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  const handleManualSubmit = () => {
+    setShowSubmitConfirm(true);
   };
 
   // Calculator input handlers
@@ -439,7 +478,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
   if (!activeSessionId && !isDoneScreen) {
     return (
       <div id="student-homepage" className="min-h-screen bg-[#09090B] text-[#FAFAFA] flex flex-col font-sans">
-        <header className="bg-[#18181B] text-[#FAFAFA] h-[64px] px-6 flex items-center justify-between border-b border-[#27272A] select-none">
+        <header className="bg-[#18181B] text-[#FAFAFA] h-[64px] px-6 flex items-center justify-between border-b border-solid border-[var(--color-outline-variant)] select-none">
           <div className="flex items-center gap-3">
             <div>
               <span className="font-extrabold text-base tracking-tight text-white uppercase">LANtern test software</span>
@@ -449,12 +488,12 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
           <div className="flex items-center gap-4">
             <div className="text-right hidden sm:block">
               <span className="text-[10px] text-[#A1A1AA] block font-semibold uppercase tracking-wider">Server IP Address</span>
-              <span className="text-sm font-bold text-violet-400 font-mono">{lanIp}</span>
+              <span className="text-sm font-bold text-[var(--color-primary)] font-mono">{lanIp}</span>
             </div>
             <div className="w-[1px] h-6 bg-[#27272A] hidden sm:block" />
             <button 
               onClick={onLogout}
-              className="px-3.5 py-1.5 bg-[#27272A] hover:bg-neutral-800 text-white rounded-lg text-xs font-semibold transition-all border border-[#3F3F46]"
+              className="px-3.5 py-1.5 bg-[#27272A] hover:bg-neutral-800 text-white rounded-sm text-xs font-semibold transition-all border border-[#3F3F46]"
             >
               Logout
             </button>
@@ -474,34 +513,34 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                 <ChevronLeft size={14} /> Back to Assigned Sheets
               </button>
 
-              <div className="bg-[#18181B] rounded-2xl border border-[#27272A] p-6 md:p-8 space-y-6 relative overflow-hidden">
+              <div className="bg-[#18181B] rounded-sm border border-solid border-[var(--color-outline-variant)] p-6 md:p-8 space-y-6 relative overflow-hidden">
                 <div className="space-y-2">
                   <h1 className="text-xl md:text-2xl font-black tracking-tight text-white">
                     {selectedInstructionTest.event_name}
                   </h1>
                   <p className="text-xs text-[#A1A1AA] font-mono">
-                    Sheet Code: <span className="font-semibold text-violet-300 font-mono">{selectedInstructionTest.test_id}</span>
+                    Sheet Code: <span className="font-semibold text-[var(--color-primary)] font-mono">{selectedInstructionTest.test_id}</span>
                   </p>
                 </div>
 
                 {/* Instructions section - custom instructions only */}
                 {selectedInstructionTest.instructions && selectedInstructionTest.instructions.trim() !== "" && (
-                  <div className="space-y-2 pt-4 border-t border-[#27272A]/70">
+                  <div className="space-y-2 pt-4 border-t border-solid border-[var(--color-outline-variant)]/70">
                     <h2 className="text-xs font-bold uppercase tracking-wider text-[#A1A1AA] flex items-center gap-1.5">
-                      <FileText size={12} className="text-violet-400" />
+                      <FileText size={12} className="text-[var(--color-primary)]" />
                       <span>Instructions & Guidance</span>
                     </h2>
-                    <div className="text-xs md:text-sm text-stone-300 leading-relaxed font-sans whitespace-pre-line bg-[#09090B] rounded-xl border border-[#27272A] p-4">
+                    <div className="text-xs md:text-sm text-stone-300 leading-relaxed font-sans whitespace-pre-line bg-[#09090B] rounded-sm border border-solid border-[var(--color-outline-variant)] p-4">
                       {selectedInstructionTest.instructions}
                     </div>
                   </div>
                 )}
 
                 {/* Bottom Launch Actions */}
-                <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-4 border-t border-[#27272A]">
+                <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-4 border-t border-solid border-[var(--color-outline-variant)]">
                   <button
                     onClick={() => setSelectedInstructionTest(null)}
-                    className="w-full sm:w-auto px-5 py-2 bg-zinc-900 hover:bg-neutral-805 hover:bg-neutral-800 border border-zinc-800 text-stone-400 hover:text-white rounded-lg font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="w-full sm:w-auto px-5 py-2 bg-zinc-900 hover:bg-neutral-805 hover:bg-neutral-800 border border-zinc-800 text-stone-400 hover:text-white rounded-sm font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                     id="btn-cancel-instructions"
                   >
                     Cancel
@@ -510,15 +549,10 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                   <button
                     onClick={() => {
                       const testId = selectedInstructionTest.test_id;
-                      const sessId = selectedInstructionTest.in_progress_session_id;
                       setSelectedInstructionTest(null);
-                      if (sessId) {
-                        launchSession(sessId);
-                      } else {
-                        handleStartTest(testId);
-                      }
+                      handleStartTest(testId);
                     }}
-                    className="w-full sm:w-auto px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-lg text-xs transition-all shadow-md hover:shadow-violet-900/30 hover:-translate-y-0.5 active:translate-y-0 flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="w-full sm:w-auto px-6 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-primary)] text-[var(--color-on-primary)] font-bold rounded-sm text-xs transition-all shadow-md hover:shadow-[var(--color-primary)]/30 hover:-translate-y-0.5 active:translate-y-0 flex items-center justify-center gap-1.5 cursor-pointer"
                     id="btn-start-instructions"
                   >
                     {getStartIcon(selectedInstructionTest.start_icon)}
@@ -532,27 +566,27 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
             </div>
           ) : (
             <>
-              <div className="bg-[#18181B] rounded-2xl border border-[#27272A] p-6 shadow-xl">
+              <div className="bg-[#18181B] rounded-sm border border-solid border-[var(--color-outline-variant)] p-6 shadow-none">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
                     <h1 className="text-2xl font-black tracking-tight text-white">Welcome back, {studentName}</h1>
                   </div>
-                  <div className="bg-[#09090B] px-3.5 py-2 rounded-xl border border-[#27272A] self-start sm:self-auto">
+                  <div className="bg-[#09090B] px-3.5 py-2 rounded-sm border border-solid border-[var(--color-outline-variant)] self-start sm:self-auto">
                     <p className="text-[9px] font-bold text-[#A1A1AA] uppercase tracking-wider">Candidate Reference</p>
-                    <p className="font-mono text-xs font-bold text-violet-400 mt-0.5">{studentId}</p>
+                    <p className="font-mono text-xs font-bold text-[var(--color-primary)] mt-0.5">{studentId}</p>
                   </div>
                 </div>
               </div>
 
               <div className="space-y-4">
                 <h2 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
-                  <BookOpen size={16} className="text-violet-500" />
+                  <BookOpen size={16} className="text-[var(--color-primary)]" />
                   <span>Assigned Question Sheets</span>
                 </h2>
 
                 <div className="grid md:grid-cols-2 gap-4">
                   {assignments.length === 0 ? (
-                    <div className="col-span-2 bg-[#18181B] rounded-2xl border border-[#27272A] p-12 text-center flex flex-col items-center">
+                    <div className="col-span-2 bg-[#18181B] rounded-sm border border-solid border-[var(--color-outline-variant)] p-12 text-center flex flex-col items-center">
                       <BookOpen size={40} className="text-[#3F3F46] mb-3" />
                       <h3 className="font-bold text-sm text-white">No active assignments</h3>
                       <p className="text-xs text-[#A1A1AA] max-w-xs mt-1 leading-relaxed">
@@ -560,7 +594,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                       </p>
                       <button 
                         onClick={fetchStudentData} 
-                        className="mt-4 px-4 py-2 bg-violet-650 hover:bg-violet-700 bg-violet-600 text-white font-bold rounded-full text-xs flex items-center gap-1.5 transition-colors"
+                        className="mt-4 px-4 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-on-primary-container)] bg-[var(--color-primary)] text-[var(--color-on-primary)] font-bold rounded-sm text-xs flex items-center gap-1.5 transition-colors"
                       >
                         <RotateCcw size={12} /> Refresh Tests List
                       </button>
@@ -569,23 +603,23 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                     assignments.map((test) => (
                       <div 
                         key={test.test_id} 
-                        className="bg-[#18181B] rounded-2xl border border-[#27272A] p-5 shadow-lg flex flex-col justify-between hover:border-[#3F3F46] transition-all relative overflow-hidden group"
+                        className="bg-[#18181B] rounded-sm border border-solid border-[var(--color-outline-variant)] p-5 shadow-none flex flex-col justify-between hover:border-[#3F3F46] transition-all relative overflow-hidden group"
                       >
                         <div>
                           <div className="flex items-start justify-between mb-3">
-                            <span className="font-mono text-[10px] font-bold text-violet-400 bg-violet-950/35 px-2.5 py-1 rounded border border-violet-900/40">
+                            <span className="font-mono text-[10px] font-bold text-[var(--color-primary)] bg-violet-950/35 px-2.5 py-1 rounded border border-[var(--color-primary)]/40">
                               {test.test_id}
                             </span>
                             {test.is_completed ? (
-                              <span className="bg-[#10B981]/10 text-[#10B981] text-[10px] font-bold uppercase py-0.5 px-2.5 rounded-full border border-[#10B981]/20">
+                              <span className="bg-[#10B981]/10 text-[#10B981] text-[10px] font-bold uppercase py-0.5 px-2.5 rounded-sm border border-[#10B981]/20">
                                 Completed
                               </span>
                             ) : test.in_progress_session_id ? (
-                              <span className="bg-amber-500/10 text-amber-500 text-[10px] font-bold uppercase py-0.5 px-2.5 rounded-full animate-pulse border border-amber-500/20">
+                              <span className="bg-amber-500/10 text-amber-500 text-[10px] font-bold uppercase py-0.5 px-2.5 rounded-sm animate-pulse border border-amber-500/20">
                                 In Progress
                               </span>
                             ) : (
-                              <span className="bg-violet-500/10 text-violet-400 text-[10px] font-bold uppercase py-0.5 px-2.5 rounded-full border border-violet-500/20">
+                              <span className="bg-[var(--color-primary)]/10 text-[var(--color-primary)] text-[10px] font-bold uppercase py-0.5 px-2.5 rounded-sm border border-[var(--color-primary)]/20">
                                 Available
                               </span>
                             )}
@@ -601,21 +635,21 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                           {test.is_completed ? (
                             <button 
                               disabled
-                              className="w-full py-2.5 bg-neutral-900 text-neutral-600 rounded-full font-bold text-[13px] cursor-not-allowed flex items-center justify-center gap-2 border border-neutral-800"
+                              className="w-full py-2.5 bg-neutral-900 text-neutral-600 rounded-sm font-bold text-[13px] cursor-not-allowed flex items-center justify-center gap-2 border border-neutral-800"
                             >
                               <CheckCircle2 size={14} /> Exam Sealed
                             </button>
                           ) : test.in_progress_session_id ? (
                             <button 
                               onClick={() => setSelectedInstructionTest(test)}
-                              className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-black rounded-full font-bold text-[13px] transition-all flex items-center justify-center gap-1.5"
+                              className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-black rounded-sm font-bold text-[13px] transition-all flex items-center justify-center gap-1.5"
                             >
                               Resume Assessment <ChevronRight size={14} />
                             </button>
                           ) : (
                             <button 
                               onClick={() => setSelectedInstructionTest(test)}
-                              className="w-full py-2.5 bg-violet-600 hover:bg-violet-500 text-white rounded-full font-bold text-[13px] transition-all flex items-center justify-center gap-1.5 shadow-md shadow-violet-900/25"
+                              className="w-full py-2.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary)] text-[var(--color-on-primary)] rounded-sm font-bold text-[13px] transition-all flex items-center justify-center gap-1.5 shadow-md shadow-[var(--color-primary)]/25"
                             >
                               Start Test <ArrowRight size={14} />
                             </button>
@@ -637,8 +671,8 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
   if (isDoneScreen) {
     return (
       <div id="student-submit-done" className="min-h-screen bg-[#09090B] text-white flex flex-col items-center justify-center p-6 text-center font-sans">
-        <div className="bg-[#18181B] max-w-md w-full rounded-2xl border border-[#27272A] p-8 md:p-10 shadow-2xl flex flex-col items-center space-y-6">
-          <div className="w-16 h-16 bg-[#10B981]/15 text-[#10B981] rounded-full flex items-center justify-center border border-[#10B981]/30">
+        <div className="bg-[#18181B] max-w-md w-full rounded-sm border border-solid border-[var(--color-outline-variant)] p-8 md:p-10 shadow-none flex flex-col items-center space-y-6">
+          <div className="w-16 h-16 bg-[#10B981]/15 text-[#10B981] rounded-sm flex items-center justify-center border border-[#10B981]/30">
             <CheckCircle2 size={36} />
           </div>
           
@@ -657,7 +691,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
               setSessionData(null);
               setTestData(null);
             }}
-            className="w-full py-3.5 bg-white hover:bg-neutral-200 text-black rounded-full font-bold text-[14px] transition-all"
+            className="w-full py-3.5 bg-white hover:bg-neutral-200 text-black rounded-sm font-bold text-[14px] transition-all"
           >
             Return to Selector
           </button>
@@ -676,15 +710,16 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
     if (isReviewScreen) {
       return (
         <div id="student-review-page" className="min-h-screen bg-[#09090B] text-white flex flex-col font-sans select-none animate-fadeIn">
+          {renderModals()}
           {/* Top Review Header */}
-          <header className="h-[60px] bg-[#18181B] text-[#FAFAFA] px-6 flex items-center justify-between border-b border-[#27272A] select-none shrink-0">
+          <header className="h-[60px] bg-[#18181B] text-[#FAFAFA] px-6 flex items-center justify-between border-b border-solid border-[var(--color-outline-variant)] select-none shrink-0">
             <div className="flex items-center gap-1.5">
-              <span className="font-extrabold text-violet-500 text-xs uppercase tracking-wider">Review Mode</span>
+              <span className="font-extrabold text-[var(--color-primary)] text-xs uppercase tracking-wider">Review Mode</span>
               <span className="text-white/20 font-bold">|</span>
               <span className="font-bold text-xs font-mono truncate max-w-[200px] md:max-w-xs">{testData.event_name}</span>
             </div>
             
-            <div className={`px-4 py-1 rounded-full font-mono font-bold flex items-center gap-1.5 border leading-none text-xs ${timeUrgent ? 'bg-red-500/10 text-red-405 text-red-400 border-red-500/20 animate-pulse' : 'bg-[#27272A] text-white border-transparent'}`}>
+            <div className={`px-4 py-1 rounded-sm font-mono font-bold flex items-center gap-1.5 border leading-none text-xs ${timeUrgent ? 'bg-red-500/10 text-red-405 text-red-400 border-red-500/20 animate-pulse' : 'bg-[#27272A] text-white border-transparent'}`}>
               <Clock size={12} />
               <span>{timeLeftStr}</span>
             </div>
@@ -696,16 +731,16 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
 
           {/* Review items grid table */}
           <main className="flex-1 max-w-3xl w-full mx-auto p-4 md:p-8 overflow-y-auto space-y-6">
-            <div className="bg-[#18181B] rounded-2xl border border-[#27272A] p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#18181B] rounded-sm border border-solid border-[var(--color-outline-variant)] p-6 shadow-none relative overflow-hidden">
               <div className="mb-6">
                 <h2 className="text-xl font-bold text-white tracking-tight animate-slideDown">Review Your Responses</h2>
                 <p className="text-xs text-[#A1A1AA] mt-1">Make sure you have answered all available questions before submitting the exam.</p>
               </div>
 
               {/* Legendary indicators card */}
-              <div className="bg-[#09090B] p-4 rounded-xl mb-6 grid grid-cols-3 gap-2 border border-[#27272A] text-[11px] text-[#A1A1AA] font-semibold">
+              <div className="bg-[#09090B] p-4 rounded-sm mb-6 grid grid-cols-3 gap-2 border border-solid border-[var(--color-outline-variant)] text-[11px] text-[#A1A1AA] font-semibold">
                 <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded bg-violet-600 text-white font-bold text-xs flex items-center justify-center">✓</div>
+                  <div className="w-6 h-6 rounded bg-[var(--color-primary)] text-[var(--color-on-primary)] font-bold text-xs flex items-center justify-center">✓</div>
                   <span>Answered</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -719,8 +754,8 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
               </div>
 
               {/* Scrollable list map */}
-              <div className="border border-[#27272A] rounded-xl overflow-hidden bg-[#09090B]">
-                <div className="grid grid-cols-12 gap-2 text-[10px] font-bold uppercase text-[#71717A] px-4 py-3 border-b border-[#27272A] tracking-wider">
+              <div className="border border-solid border-[var(--color-outline-variant)] rounded-sm overflow-hidden bg-[#09090B]">
+                <div className="grid grid-cols-12 gap-2 text-[10px] font-bold uppercase text-[#71717A] px-4 py-3 border-b border-solid border-[var(--color-outline-variant)] tracking-wider">
                   <div className="col-span-2 text-center">No.</div>
                   <div className="col-span-2 text-center">Type</div>
                   <div className="col-span-5">Response Status</div>
@@ -737,16 +772,16 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                       statusLabel = <span className="text-white font-medium">Selected ( {ans.selected_mc} )</span>;
                       hasAnswerVal = true;
                     } else if (q.type === 'FRQ' && ans.frq_text && ans.frq_text.trim().length > 0) {
-                      statusLabel = <span className="text-violet-400 font-medium truncate">Saved Draft ({ans.frq_text.length} chars)</span>;
+                      statusLabel = <span className="text-[var(--color-primary)] font-medium truncate">Saved Draft ({ans.frq_text.length} chars)</span>;
                       hasAnswerVal = true;
                     }
 
                     return (
                       <div key={q.id} className="grid grid-cols-12 gap-2 px-4 py-3 items-center hover:bg-[#18181B]/30 transition-colors select-none text-xs">
                         <div className="col-span-2 text-center">
-                          <span className={`w-7 h-7 rounded font-bold inline-flex items-center justify-center relative ${hasAnswerVal ? 'bg-violet-600 text-white' : 'bg-[#18181B] text-[#71717A] border border-[#27272A]'}`}>
+                          <span className={`w-7 h-7 rounded font-bold inline-flex items-center justify-center relative ${hasAnswerVal ? 'bg-[var(--color-primary)] text-[var(--color-on-primary)]' : 'bg-[#18181B] text-[#71717A] border border-solid border-[var(--color-outline-variant)]'}`}>
                             {q.number}
-                            {ans.flagged && <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-amber-500 rounded-full" />}
+                            {ans.flagged && <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-amber-500 rounded-sm" />}
                           </span>
                         </div>
                         <div className="col-span-2 text-center font-mono font-bold tracking-wider text-[10px] text-zinc-500 uppercase">{q.type}</div>
@@ -760,7 +795,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                               setCurQIndex(idx);
                               setIsReviewScreen(false);
                             }}
-                            className="bg-[#27272A] text-white hover:bg-[#3F3F46] font-bold text-xs px-3 py-1 rounded-lg transition-all"
+                            className="bg-[#27272A] text-white hover:bg-[#3F3F46] font-bold text-xs px-3 py-1 rounded-sm transition-all"
                           >
                             Jump
                           </button>
@@ -779,14 +814,14 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                   setCurQIndex(totalQCount - 1);
                   setIsReviewScreen(false);
                 }}
-                className="w-full sm:w-auto px-5 py-2.5 bg-[#18181B] text-white hover:bg-[#27272A] border border-[#27272A] rounded-full text-xs font-bold transition-all"
+                className="w-full sm:w-auto px-5 py-2.5 bg-[#18181B] text-white hover:bg-[#27272A] border border-solid border-[var(--color-outline-variant)] rounded-sm text-xs font-bold transition-all"
               >
                 Back To Questions
               </button>
 
               <button 
                 onClick={handleManualSubmit}
-                className="w-full sm:w-auto px-6 py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-full text-xs shadow-lg transition-all flex items-center justify-center gap-1.5"
+                className="w-full sm:w-auto px-6 py-2.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary)] text-[var(--color-on-primary)] font-bold rounded-sm text-xs shadow-none transition-all flex items-center justify-center gap-1.5"
               >
                 <CheckCircle2 size={14} /> Submit Final Answers
               </button>
@@ -795,8 +830,8 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
 
           {/* --- NON-BLOCKING CHEAT TOAST --- */}
           {isCheatWarningVisible && (
-            <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-[#1C1917]/95 border border-amber-600/50 rounded-2xl p-4 shadow-2xl animate-slideUp text-white flex gap-3 items-start select-none">
-              <div className="bg-amber-600/10 p-2 rounded-xl text-amber-500 shrink-0 mt-0.5">
+            <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-[#1C1917]/95 border border-amber-600/50 rounded-sm p-4 shadow-none animate-slideUp text-white flex gap-3 items-start select-none">
+              <div className="bg-amber-600/10 p-2 rounded-sm text-amber-500 shrink-0 mt-0.5">
                 <AlertTriangle size={18} />
               </div>
               <div className="space-y-1">
@@ -810,7 +845,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                 <div className="pt-2">
                   <button 
                     onClick={() => setIsCheatWarningVisible(false)}
-                    className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] rounded-lg transition-all"
+                    className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] rounded-sm transition-all"
                   >
                     Acknowledge
                   </button>
@@ -822,11 +857,12 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
       );
     }    return (
       <div id={`student-test-${activeSessionId}`} className="min-h-screen bg-[var(--color-background)] text-[var(--color-on-background)] flex flex-col select-text font-sans selection:bg-[var(--color-primary-container)] selection:text-[var(--color-on-primary-container)]">
+        {renderModals()}
         
         {/* TOP HEADER: Minimal Luminous Dark Header */}
         <header className="h-[60px] bg-[var(--color-surface)] text-[var(--color-on-surface)] px-6 flex items-center justify-between shrink-0 select-none border-b border-[var(--color-surface-container-highest)] shadow-none z-25">
           <div className="flex items-center gap-4">
-            <span className="font-mono text-xs font-black tracking-widest text-violet-400 uppercase hidden md:inline">LANtern test software</span>
+            <span className="font-mono text-xs font-black tracking-widest text-[var(--color-primary)] uppercase hidden md:inline">LANtern test software</span>
             <div className="h-4 w-[1px] bg-[var(--color-surface-container-highest)] hidden md:inline" />
             <button 
               onClick={() => handleToggleFlag(currentQuestion.id)}
@@ -855,7 +891,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                 <div className="flex items-center gap-3 mt-1 text-[11px] font-medium text-[var(--color-on-surface-variant)]">
                   <button onClick={() => {
                     if (timeUrgent) {
-                      alert('Timer cannot be hidden during the final 5 minutes.');
+                      setErrorMessage('Timer cannot be hidden during the final 5 minutes.');
                       return;
                     }
                     setIsTimerHidden(true);
@@ -866,7 +902,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
           </div>
 
           <div className="flex items-center gap-3 text-[var(--color-on-surface-variant)]">
-            <button onClick={() => setIsReviewScreen(true)} className="p-1.5 bg-[#27272A] hover:bg-neutral-800 text-white rounded-lg text-xs font-semibold border border-[#3F3F46]" title="Review All Questions">
+            <button onClick={() => setIsReviewScreen(true)} className="p-1.5 bg-[#27272A] hover:bg-neutral-800 text-white rounded-sm text-xs font-semibold border border-[#3F3F46]" title="Review All Questions">
               Review List
             </button>
           </div>
@@ -876,16 +912,16 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
         <div className="flex-1 flex overflow-hidden relative border-b border-[var(--color-surface-container-highest)]">
           
           {/* Left Side: Context / Reading / Prompt */}
-          <div className="w-1/2 h-full overflow-y-auto px-8 md:px-12 py-8 border-r border-[#353534] border-dashed">
+          <div className="w-1/2 h-full overflow-y-auto px-8 md:px-12 py-8 border-r border-[#353534] border-solid">
             <div className="text-[16px] leading-[32px] text-[var(--color-on-surface)] font-medium tracking-wide whitespace-pre-wrap select-text mt-1">
               <LatexRenderer text={currentQuestion.prompt} />
             </div>
             {currentQuestion.image_url && (
-              <div className="mt-8 flex justify-center border border-[#49454F]/20 rounded-2xl overflow-hidden bg-black/10 p-2.5 max-w-full">
+              <div className="mt-8 flex justify-center border border-[#49454F]/20 rounded-sm overflow-hidden bg-black/10 p-2.5 max-w-full">
                 <img 
                   src={getDirectImageUrl(currentQuestion.image_url)} 
                   alt="Question contextual illustration reference" 
-                  className="max-h-80 w-auto rounded-xl object-contain shadow-sm"
+                  className="max-h-80 w-auto rounded-sm object-contain shadow-sm"
                   referrerPolicy="no-referrer"
                 />
               </div>
@@ -915,7 +951,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                       className={`group rounded-[0.5rem] p-4 flex items-center gap-5 cursor-pointer transition-all border ${isEliminated ? 'opacity-40 border-[var(--color-surface-container-highest)] bg-[var(--color-surface-container-low)] line-through' : isSelected ? 'border-[var(--color-primary)] bg-[var(--color-surface-container-high)]' : 'border-[var(--color-outline-variant)] hover:bg-[var(--color-surface-container)] hover:border-[var(--color-outline)]'}`}
                     >
                       {/* Circle selection badge option A B C D */}
-                      <div className={`w-8 h-8 rounded-full border flex items-center justify-center font-semibold text-[13px] shrink-0 transition-colors select-none ${isSelected ? 'bg-[var(--color-primary)] border-[var(--color-primary)] text-[var(--color-on-primary)]' : 'bg-transparent border-[var(--color-outline)] text-[var(--color-on-surface)]'}`}>
+                      <div className={`w-8 h-8 rounded-sm border flex items-center justify-center font-semibold text-[13px] shrink-0 transition-colors select-none ${isSelected ? 'bg-[var(--color-primary)] border-[var(--color-primary)] text-[var(--color-on-primary)]' : 'bg-transparent border-[var(--color-outline)] text-[var(--color-on-surface)]'}`}>
                         {optKey}
                       </div>
                       
@@ -968,7 +1004,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
 
             {/* EXPANDED QUESTIONS GRID OVERLAY DRAWER */}
             {isNavDrawerOpen && (
-              <div className="absolute bottom-[60px] left-0 w-[300px] bg-[var(--color-surface-container)] border border-[var(--color-outline-variant)] rounded-[1rem] p-4 shadow-2xl z-40 select-none">
+              <div className="absolute bottom-[60px] left-0 w-[300px] bg-[var(--color-surface-container)] border border-[var(--color-outline-variant)] rounded-[1rem] p-4 shadow-none z-40 select-none">
                 <div className="flex items-center justify-between mb-3 pb-2">
                   <span className="text-[13px] font-semibold text-[var(--color-on-surface)]">Navigate</span>
                   <button onClick={() => setIsNavDrawerOpen(false)} className="text-[var(--color-on-surface-variant)] hover:text-[var(--color-on-surface)]">
@@ -991,11 +1027,11 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
                           setIsNavDrawerOpen(false);
                           setIsReviewScreen(false);
                         }}
-                        className={`w-9 h-9 rounded-full text-[13px] font-bold flex items-center justify-center relative transition-all ${isCur ? 'bg-[var(--color-on-surface)] text-[var(--color-surface)]' : hasAns ? 'bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)]' : 'bg-[var(--color-surface-container-high)] text-[var(--color-on-surface)] hover:bg-[var(--color-surface-variant)]'}`}
+                        className={`w-9 h-9 rounded-sm text-[13px] font-bold flex items-center justify-center relative transition-all ${isCur ? 'bg-[var(--color-on-surface)] text-[var(--color-surface)]' : hasAns ? 'bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)]' : 'bg-[var(--color-surface-container-high)] text-[var(--color-on-surface)] hover:bg-[var(--color-surface-variant)]'}`}
                       >
                         {q.number}
                         {isFl && (
-                          <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-[var(--color-error)] rounded-full border-2 border-[var(--color-surface-container)]" />
+                          <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-[var(--color-error)] rounded-sm border-2 border-[var(--color-surface-container)]" />
                         )}
                       </button>
                     );
@@ -1033,8 +1069,8 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
 
         {/* --- NON-BLOCKING CHEAT TOAST --- */}
         {isCheatWarningVisible && (
-          <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-[#1C1917]/95 border border-amber-600/50 rounded-2xl p-4 shadow-2xl animate-slideUp text-white flex gap-3 items-start select-none">
-            <div className="bg-amber-600/10 p-2 rounded-xl text-amber-500 shrink-0 mt-0.5">
+          <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-[#1C1917]/95 border border-amber-600/50 rounded-sm p-4 shadow-none animate-slideUp text-white flex gap-3 items-start select-none">
+            <div className="bg-amber-600/10 p-2 rounded-sm text-amber-500 shrink-0 mt-0.5">
               <AlertTriangle size={18} />
             </div>
             <div className="space-y-1">
@@ -1048,7 +1084,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
               <div className="pt-2">
                 <button 
                   onClick={() => setIsCheatWarningVisible(false)}
-                  className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] rounded-lg transition-all"
+                  className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] rounded-sm transition-all"
                 >
                   Acknowledge
                 </button>
@@ -1061,7 +1097,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
   }
 
   return (
-    <div className="p-8 text-center bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-3xl m-8">
+    <div className="p-8 text-center bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm m-8">
       <p className="font-bold text-[var(--color-error)] mb-2">Runner Error</p>
       <p className="text-sm text-[var(--color-on-surface-variant)]">Wait, blueprint states have loaded incorrectly.</p>
     </div>

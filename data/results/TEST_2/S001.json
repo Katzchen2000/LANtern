@@ -1,0 +1,14 @@
+{
+  "student_id": "S001",
+  "test_id": "TEST_2",
+  "session_id": "8415d490-e4ae-4d33-b6ed-c4367c2ff7c6",
+  "submitted_at": "2026-06-11T20:22:32.415Z",
+  "mc_score": 0,
+  "mc_total": 10,
+  "frq_grades": {},
+  "frq_score": 0,
+  "frq_total": 15,
+  "total_score": 0,
+  "total_possible": 25,
+  "infraction_count": 0
+}

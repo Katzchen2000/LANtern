@@ -193,19 +193,19 @@ export default function App() {
                   placeholder="Master passcode"
                   value={setupPasswordInput}
                   onChange={(e) => setSetupPasswordInput(e.target.value)}
-                  className="w-full text-[15px] border border-[#27272A] bg-[#09090B] focus:border-[#A1A1AA] text-white rounded-full px-6 py-4 outline-none text-center transition-all placeholder-[#52525B]"
+                  className="w-full text-[15px] border border-[#27272A] bg-[#09090B] focus:border-[#A1A1AA] text-white rounded-sm px-6 py-4 outline-none text-center transition-all placeholder-[#52525B]"
                 />
               </div>
 
               {loginError && (
-                <p className="text-xs text-[#EF4444] font-semibold text-center bg-red-950/20 border border-red-900/30 px-4 py-2.5 rounded-full">
+                <p className="text-xs text-[#EF4444] font-semibold text-center bg-red-950/20 border border-red-900/30 px-4 py-2.5 rounded-sm">
                   {loginError}
                 </p>
               )}
 
               <button 
                 type="submit"
-                className="w-full py-4 bg-[#FAFAFA] hover:bg-neutral-200 text-[#09090B] font-bold rounded-full text-[15px] transition-all flex items-center justify-center shadow-md select-none"
+                className="w-full py-4 bg-[#FAFAFA] hover:bg-neutral-200 text-[#09090B] font-bold rounded-sm text-[15px] transition-all flex items-center justify-center shadow-none select-none"
               >
                 Configure Server Setup
               </button>
@@ -245,19 +245,19 @@ export default function App() {
                   placeholder="Supervisor Password"
                   value={adminPasswordInput}
                   onChange={(e) => setAdminPasswordInput(e.target.value)}
-                  className="w-full text-[15px] border border-[#27272A] bg-[#09090B] focus:border-[#A1A1AA] text-white rounded-full px-6 py-4 outline-none text-center transition-all placeholder-[#52525B]"
+                  className="w-full text-[15px] border border-[#27272A] bg-[#09090B] focus:border-[#A1A1AA] text-white rounded-sm px-6 py-4 outline-none text-center transition-all placeholder-[#52525B]"
                 />
               </div>
 
               {loginError && (
-                <p className="text-xs text-[#EF4444] font-semibold text-center bg-red-950/20 border border-red-900/30 px-4 py-2.5 rounded-full">
+                <p className="text-xs text-[#EF4444] font-semibold text-center bg-red-950/20 border border-red-900/30 px-4 py-2.5 rounded-sm">
                   {loginError}
                 </p>
               )}
 
               <button 
                 type="submit"
-                className="w-full py-4 bg-[#FAFAFA] hover:bg-neutral-200 text-[#09090B] font-bold rounded-full text-[15px] transition-all flex items-center justify-center shadow-md select-none"
+                className="w-full py-4 bg-[#FAFAFA] hover:bg-neutral-200 text-[#09090B] font-bold rounded-sm text-[15px] transition-all flex items-center justify-center shadow-none select-none"
               >
                 Continue as Supervisor
               </button>
@@ -309,19 +309,19 @@ export default function App() {
               placeholder="student-001"
               value={studentIdInput}
               onChange={(e) => setStudentIdInput(e.target.value)}
-              className="w-full text-[15px] border border-[#27272A] bg-[#09090B] focus:border-[#A1A1AA] text-white rounded-full px-6 py-4 outline-none text-center transition-all placeholder-[#52525B]"
+              className="w-full text-[15px] border border-[#27272A] bg-[#09090B] focus:border-[#A1A1AA] text-white rounded-sm px-6 py-4 outline-none text-center transition-all placeholder-[#52525B]"
             />
           </div>
 
           {loginError && (
-            <p className="text-xs text-[#EF4444] font-semibold text-center bg-red-950/20 border border-red-900/30 px-4 py-2.5 rounded-full">
+            <p className="text-xs text-[#EF4444] font-semibold text-center bg-red-950/20 border border-red-900/30 px-4 py-2.5 rounded-sm">
               {loginError}
             </p>
           )}
 
           <button 
             type="submit"
-            className="w-full py-4 bg-[#FAFAFA] hover:bg-neutral-200 text-[#09090B] font-bold rounded-full text-[15px] transition-all flex items-center justify-center shadow-md select-none"
+            className="w-full py-4 bg-[#FAFAFA] hover:bg-neutral-200 text-[#09090B] font-bold rounded-sm text-[15px] transition-all flex items-center justify-center shadow-none select-none"
           >
             Continue with Student ID
           </button>

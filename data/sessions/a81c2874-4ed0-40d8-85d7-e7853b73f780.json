@@ -1,0 +1,11 @@
+{
+  "session_id": "a81c2874-4ed0-40d8-85d7-e7853b73f780",
+  "student_id": "S001",
+  "test_id": "TEST_1",
+  "started_at": "2026-06-11T20:13:37.063Z",
+  "expires_at": "2026-06-11T20:43:37.063Z",
+  "submitted_at": "2026-06-11T20:13:37.069Z",
+  "status": "submitted",
+  "session_token": "2e9669fa3ccbd35136f7fc732ff0fdfd",
+  "answers": {}
+}

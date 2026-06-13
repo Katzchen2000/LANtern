@@ -3,7 +3,7 @@ import {
   BarChart, BookOpen, Users, Activity, FileText, Settings, LogOut,
   Upload, Download, Plus, Trash2, Edit, Save, ArrowRight, ShieldCheck,
   PlusCircle, RefreshCw, Key, HelpCircle, Check, Database, Clock, Play, Sparkles, Bot, AlertCircle, Eye,
-  Mail, Trash
+  Mail, Trash, CheckCircle2
 } from 'lucide-react';
 import { Test, Question, Student, Roster, Session, Result } from '../types';
 import { LatexRenderer } from './LatexRenderer';
@@ -41,6 +41,18 @@ const LiveSessionCountdown = ({ expiresAt }: { expiresAt?: string }) => {
   );
 };
 
+function estimateFrqTokens(item: { prompt?: string; rubric_guide?: string; student_response?: string }) {
+  const promptWords = (item.prompt || '').trim().split(/\s+/).filter(Boolean).length;
+  const rubricWords = (item.rubric_guide || '').trim().split(/\s+/).filter(Boolean).length;
+  const responseWords = (item.student_response || '').trim().split(/\s+/).filter(Boolean).length;
+  const totalWords = promptWords + rubricWords + responseWords;
+  
+  const estimatedInputTokens = Math.ceil(totalWords * 1.35) + 600;
+  const estimatedOutputTokens = 300;
+  
+  return Math.max(800, estimatedInputTokens + estimatedOutputTokens);
+}
+
 interface AdminPanelProps {
   onLogout: () => void;
 }
@@ -74,8 +86,51 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   
   // Secrets management
-  const [secretsStatus, setSecretsStatus] = useState<{ is_configured: boolean; masked_key: string } | null>(null);
+  const [secretsStatus, setSecretsStatus] = useState<{
+    is_configured: boolean;
+    masked_key: string;
+    gemini_usage_left?: number;
+    gemini_quota_limit?: number;
+    estimated_frqs_left?: number;
+  } | null>(null);
   const [newGeminiKey, setNewGeminiKey] = useState('');
+
+  // Centralized Custom Non-Blocking Modal/Alert State
+  const [customModal, setCustomModal] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    type: 'confirm' | 'alert' | 'success';
+    onConfirm?: () => void;
+  } | null>(null);
+
+  const requestConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setCustomModal({
+      show: true,
+      title,
+      message,
+      type: 'confirm',
+      onConfirm
+    });
+  };
+
+  const triggerAlert = (title: string, message: string) => {
+    setCustomModal({
+      show: true,
+      title,
+      message,
+      type: 'alert'
+    });
+  };
+
+  const triggerSuccess = (title: string, message: string) => {
+    setCustomModal({
+      show: true,
+      title,
+      message,
+      type: 'success'
+    });
+  };
 
   // SMTP Settings & Simulator States
   const [smtpConfig, setSmtpConfig] = useState({
@@ -95,6 +150,15 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
   const [stressReport, setStressReport] = useState<any | null>(null);
   const [stressStudentsCount, setStressStudentsCount] = useState(200);
   const [stressConcurrencyLimit, setStressConcurrencyLimit] = useState(20);
+
+  // Derived tracking stats for Gemini Limits config
+  const geminiUsageLeft = stressReport ? (stressReport.gemini_usage_left !== undefined ? stressReport.gemini_usage_left : 1500000) : (secretsStatus?.gemini_usage_left !== undefined ? secretsStatus.gemini_usage_left : 1500000);
+  const geminiQuotaLimit = stressReport ? (stressReport.gemini_quota_limit !== undefined ? stressReport.gemini_quota_limit : 1500000) : (secretsStatus?.gemini_quota_limit !== undefined ? secretsStatus.gemini_quota_limit : 1500000);
+  const estimatedFrqsLeft = stressReport ? (stressReport.estimated_frqs_left !== undefined ? stressReport.estimated_frqs_left : (secretsStatus?.estimated_frqs_left !== undefined ? secretsStatus.estimated_frqs_left : 1000)) : (secretsStatus?.estimated_frqs_left !== undefined ? secretsStatus.estimated_frqs_left : 1000);
+  const responsesGradedPerSec = stressReport ? (stressReport.responses_graded_per_sec !== undefined ? stressReport.responses_graded_per_sec : 0) : 0;
+  
+  const outstandingDemandSum = gradingQueue.filter(q => !q.grade).reduce((acc, q) => acc + estimateFrqTokens(q), 0);
+  const hasEnoughBudget = geminiUsageLeft >= outstandingDemandSum;
   
   // Detailed responses viewing modal
   const [viewingResponseSessionId, setViewingResponseSessionId] = useState<string | null>(null);
@@ -186,6 +250,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
           alert(data.message || 'AI Autograding completed.');
         }
         fetchGradingQueue();
+        fetchSecretsStatus();
       } else {
         const err = await res.json();
         alert('AI Autograding failed: ' + (err.error || 'Server error.'));
@@ -251,29 +316,34 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
         body: JSON.stringify(smtpConfig)
       });
       if (res.ok) {
-        alert('SMTP configurations saved successfully!');
+        triggerSuccess('Success', 'SMTP configurations saved successfully!');
         fetchSmtpConfig();
       } else {
         const err = await res.json();
-        alert('Failed to save SMTP: ' + (err.error || 'Unknown error'));
+        triggerAlert('SMTP Configuration Error', 'Failed to save SMTP: ' + (err.error || 'Unknown error'));
       }
     } catch (e) {
-      alert('Network error saving SMTP config.');
+      triggerAlert('Network Error', 'Network error saving SMTP config.');
     }
   };
 
   // Reset SMTP simulation log outbox
   const handleClearOutboundEmails = async () => {
-    if (!confirm('Are you sure you want to clear all archived emails in the simulator queue?')) return;
-    try {
-      const res = await fetch('/api/admin/outbound-emails', { method: 'DELETE' });
-      if (res.ok) {
-        setOutboundEmails([]);
-        alert('Outbound simulator queue successfully cleared.');
+    requestConfirm(
+      'Clear Simulator Queue',
+      'Are you sure you want to clear all archived emails in the simulator queue?',
+      async () => {
+        try {
+          const res = await fetch('/api/admin/outbound-emails', { method: 'DELETE' });
+          if (res.ok) {
+            setOutboundEmails([]);
+            triggerSuccess('Cleared', 'Outbound simulator queue successfully cleared.');
+          }
+        } catch (e) {
+          triggerAlert('Network Error', 'Network error clearing simulating logs.');
+        }
       }
-    } catch (e) {
-      alert('Network error clearing simulating logs.');
-    }
+    );
   };
 
   // Run concurrent system stress testing simulator
@@ -292,11 +362,20 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
       const data = await res.json();
       if (res.ok && data.success) {
         setStressReport(data.report);
+        if (data.report) {
+          setSecretsStatus(prev => prev ? {
+            ...prev,
+            gemini_usage_left: data.report.gemini_usage_left,
+            gemini_quota_limit: data.report.gemini_quota_limit,
+            estimated_frqs_left: data.report.estimated_frqs_left
+          } : null);
+        }
+        triggerSuccess('Simulation Succeeded', `Stress test processed ${data.report.students_simulated} concurrent student submissions successfully!`);
       } else {
-        alert('Simulator execution failed: ' + (data.error || 'Server error during load test.'));
+        triggerAlert('Simulator Failed', 'Simulator execution failed: ' + (data.error || 'Server error during load test.'));
       }
     } catch (e: any) {
-      alert('Failover: Network timeout or connection interrupted during high-stress simulation.');
+      triggerAlert('Connection Failover', 'Failover: Network timeout or connection interrupted during high-stress simulation.');
     } finally {
       setIsSimulatingStress(false);
     }
@@ -484,26 +563,31 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
         setActiveTab('tests');
       } else {
         const rErr = await res.json();
-        alert('Template creation error: ' + rErr.error);
+        triggerAlert('Blueprint Error', 'Template creation error: ' + rErr.error);
       }
     } catch (e) {
-      alert('Error creating blueprint template.');
+      triggerAlert('Network Error', 'Error creating blueprint template.');
     }
   };
 
   // Delete Test with cascade warnings
   const handleDeleteTest = async (tId: string) => {
-    if (!confirm(`Are you absolutely sure you want to permanently delete Test "${tId}"? All associated student session timers, answers, and graded result scores will also be deleted from the host disk.`)) {
-      return;
-    }
-    try {
-      const res = await fetch(`/api/admin/tests/${tId}`, { method: 'DELETE' });
-      if (res.ok) {
-        alert('Test successfully deleted from disk.');
-        if (selectedTestId === tId) setSelectedTestId(null);
-        triggerMasterRefresh();
+    requestConfirm(
+      'Delete Test Blueprint',
+      `Are you absolutely sure you want to permanently delete Test "${tId}"? All associated student session timers, answers, and graded result scores will also be deleted from the host disk. This is irreversible!`,
+      async () => {
+        try {
+          const res = await fetch(`/api/admin/tests/${tId}`, { method: 'DELETE' });
+          if (res.ok) {
+            triggerSuccess('Deleted', 'Test successfully deleted from disk.');
+            if (selectedTestId === tId) setSelectedTestId(null);
+            triggerMasterRefresh();
+          }
+        } catch (e) {
+          triggerAlert('Network Error', 'Error deleting blueprint file.');
+        }
       }
-    } catch (e) {}
+    );
   };
 
   // Update Test Blueprint changes
@@ -516,100 +600,109 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
         body: JSON.stringify(activeTestDetail)
       });
       if (res.ok) {
-        alert('Blueprint configuration changes securely written to host tests/*.json file.');
+        triggerSuccess('Success', 'Blueprint configuration changes securely written to host tests/*.json file.');
         fetchTests();
       } else {
         const rE = await res.json();
-        alert('Failed: ' + rE.error);
+        triggerAlert('Configuration Error', 'Failed to save changes: ' + rE.error);
       }
     } catch (e) {
-      alert('Communications failure.');
+      triggerAlert('Network Error', 'Communications failure saving blueprint detail.');
     }
   };
 
   // Send graded score diagnostics to a single student
   const handleMailSingleGrade = async (testId: string, studentId: string) => {
-    const confirmSend = confirm(`Are you sure you want to send the graded scorecard diagnostic report over email to student "${studentId}" for test "${testId}"?`);
-    if (!confirmSend) return;
-
-    const key = `${testId}-${studentId}`;
-    if (isSendingEmail[key]) return;
-    setIsSendingEmail(prev => ({ ...prev, [key]: true }));
-    try {
-      const res = await fetch('/api/admin/email-result', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test_id: testId, student_id: studentId })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.message || 'Diagnostic scorecard successfully sent!');
-        fetchOutboundEmails(); // Refresh the simulator console log!
-      } else {
-        alert('Mail dispatch failed: ' + (data.error || 'Unknown error'));
+    requestConfirm(
+      'Send scorecard diagnostic report',
+      `Are you sure you want to send the graded scorecard diagnostic report over email to student "${studentId}" for test "${testId}"?`,
+      async () => {
+        const key = `${testId}-${studentId}`;
+        if (isSendingEmail[key]) return;
+        setIsSendingEmail(prev => ({ ...prev, [key]: true }));
+        try {
+          const res = await fetch('/api/admin/email-result', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ test_id: testId, student_id: studentId })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            triggerSuccess('Email Sent', data.message || 'Diagnostic scorecard successfully sent!');
+            fetchOutboundEmails(); // Refresh the simulator console log!
+          } else {
+            triggerAlert('Email Failure', 'Mail dispatch failed: ' + (data.error || 'Unknown error'));
+          }
+        } catch (e) {
+          triggerAlert('Network Error', 'Network communication failure sending grade email.');
+        } finally {
+          setIsSendingEmail(prev => ({ ...prev, [key]: false }));
+        }
       }
-    } catch (e) {
-      alert('Network communication failure sending grade email.');
-    } finally {
-      setIsSendingEmail(prev => ({ ...prev, [key]: false }));
-    }
+    );
   };
 
   // Bulk mail scorecards to all students assigned this test
   const handleMailBulkGrades = async () => {
     if (!activeTestDetail) return;
     const testId = activeTestDetail.test_id;
-    if (!confirm(`Are you sure you want to broadcast graded scorecard emails to all students assigned to Test "${activeTestDetail.event_name}" (${testId})? This will send emails through your configured SMTP channel, or queue them in Mock mode if SMTP is not set.`)) {
-      return;
-    }
-    try {
-      const res = await fetch('/api/admin/email-results-bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test_id: testId })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        const simMsg = data.simulatedCount > 0 ? `\\n- Generated ${data.simulatedCount} simulated scorecards in queue.` : '';
-        const realMsg = data.successCount > 0 ? `\\n- Dispatched ${data.successCount} real emails successfully via SMTP.` : '';
-        const skipMsg = data.skippedCount > 0 ? `\\n- Skipped ${data.skippedCount} profiles (unsubmitted sessions or student email not assigned in roster).` : '';
-        
-        let errMsg = '';
-        if (data.errors && data.errors.length > 0) {
-          errMsg = `\\n\\nErrors encountered:\\n` + data.errors.join('\\n');
-        }
+    requestConfirm(
+      'Bulk Scorecard Broadcast',
+      `Are you sure you want to broadcast graded scorecard emails to all students assigned to Test "${activeTestDetail.event_name}" (${testId})? This will send emails through your configured SMTP channel, or queue them in Mock mode if SMTP is not set.`,
+      async () => {
+        try {
+          const res = await fetch('/api/admin/email-results-bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ test_id: testId })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            const simMsg = data.simulatedCount > 0 ? `\n- Generated ${data.simulatedCount} simulated scorecards in queue.` : '';
+            const realMsg = data.successCount > 0 ? `\n- Dispatched ${data.successCount} real emails successfully via SMTP.` : '';
+            const skipMsg = data.skippedCount > 0 ? `\n- Skipped ${data.skippedCount} profiles (unsubmitted sessions or student email not assigned in roster).` : '';
+            
+            let errMsg = '';
+            if (data.errors && data.errors.length > 0) {
+              errMsg = `\n\nErrors encountered:\n` + data.errors.join('\n');
+            }
 
-        alert(`Bulk Scorecard broadcast completed!${simMsg}${realMsg}${skipMsg}${errMsg}`);
-        fetchOutboundEmails(); // Refresh local logs
-      } else {
-        alert('Bulk scorecard delivery failed: ' + (data.error || 'Unknown error'));
+            triggerSuccess('Broadcast Complete', `Bulk Scorecard broadcast completed!${simMsg}${realMsg}${skipMsg}${errMsg}`);
+            fetchOutboundEmails(); // Refresh local logs
+          } else {
+            triggerAlert('Broadcast Failure', 'Bulk scorecard delivery failed: ' + (data.error || 'Unknown error'));
+          }
+        } catch (e) {
+          triggerAlert('Network Error', 'Network failure triggering bulk deliveries.');
+        }
       }
-    } catch (e) {
-      alert('Network failure triggering bulk deliveries.');
-    }
+    );
   };
 
   // Regrade MC submissions based on updated correct_mc definitions
   const handleRegradeSubmissions = async () => {
     if (!activeTestDetail) return;
     const testId = activeTestDetail.test_id;
-    if (!confirm(`This will recalculate the multiple-choice scores for all completed/submitted student sessions for Test "${testId}" based on the current answer key definitions on this workspace. Proceed?`)) {
-      return;
-    }
-    try {
-      const res = await fetch(`/api/admin/tests/${testId}/regrade`, {
-        method: 'POST'
-      });
-      if (res.ok) {
-        const data = await res.json();
-        alert(data.message || 'Successfully regraded all submitted student responses!');
-      } else {
-        const err = await res.json();
-        alert('Regrading failed: ' + (err.error || 'Server error'));
+    requestConfirm(
+      'Recalculate Multiple-Choice Grades',
+      `This will recalculate the multiple-choice scores for all completed/submitted student sessions for Test "${testId}" based on the current answer key definitions on this workspace. Proceed?`,
+      async () => {
+        try {
+          const res = await fetch(`/api/admin/tests/${testId}/regrade`, {
+            method: 'POST'
+          });
+          if (res.ok) {
+            const data = await res.json();
+            triggerSuccess('Regrading Done', data.message || 'Successfully regraded all submitted student responses!');
+          } else {
+            const err = await res.json();
+            triggerAlert('Regrading Failure', 'Regrading failed: ' + (err.error || 'Server error'));
+          }
+        } catch (e) {
+          triggerAlert('Network Error', 'Communications failure.');
+        }
       }
-    } catch (e) {
-      alert('Communications failure.');
-    }
+    );
   };
 
   // Create/Upsert Student profile
@@ -631,57 +724,86 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
         })
       });
       if (res.ok) {
-        alert(editingStudentId ? 'Student profile updated successfully!' : 'Student profile saved successfully!');
+        triggerSuccess('Success', editingStudentId ? 'Student profile updated successfully!' : 'Student profile saved successfully!');
         setNewStudentForm({ student_id: '', student_name: '', email: '', assigned_str: '' });
         setEditingStudentId(null);
         fetchRoster();
       } else {
         const errData = await res.json();
-        alert('Error: ' + (errData.error || 'Failed to save student profile'));
+        triggerAlert('Error', 'Error: ' + (errData.error || 'Failed to save student profile'));
       }
     } catch (e) {
-      alert('Communication failure while saving student.');
+      triggerAlert('Communications failure', 'Communication failure while saving student.');
     }
   };
 
   const handleDeleteStudent = async (sId: string) => {
-    if (!confirm('Are you sure you want to delete this student from the active roster? This will not affect submitted grades on disk.')) return;
-    try {
-      const res = await fetch(`/api/admin/roster/student/${sId}`, { method: 'DELETE' });
-      if (res.ok) {
-        fetchRoster();
+    requestConfirm(
+      'Delete Student Profile',
+      'Are you sure you want to delete this student from the active roster? This will not affect submitted grades on disk.',
+      async () => {
+        try {
+          const res = await fetch(`/api/admin/roster/student/${sId}`, { method: 'DELETE' });
+          if (res.ok) {
+            fetchRoster();
+            triggerSuccess('Removed', 'Student removed from active roster successfully.');
+          }
+        } catch(e) {}
       }
-    } catch(e) {}
+    );
   };
 
   // Tabbed components controllers: Live sessions action tools
   const triggerForceSubmit = async (sId: string) => {
-    if (!confirm('Force automatic evaluation and lock progress?')) return;
-    try {
-      const res = await fetch(`/api/admin/sessions/${sId}/force-submit`, { method: 'POST' });
-      if (res.ok) fetchLiveSessions();
-    } catch(e) {}
+    requestConfirm(
+      'Force Submit Session',
+      'Force automatic evaluation and lock progress for this student session? The exam will be locked and formatted scores calculated.',
+      async () => {
+        try {
+          const res = await fetch(`/api/admin/sessions/${sId}/force-submit`, { method: 'POST' });
+          if (res.ok) {
+            triggerSuccess('Success', 'Exam session force-submitted successfully.');
+            fetchLiveSessions();
+          }
+        } catch(e) {}
+      }
+    );
   };
 
   const triggerExtendTimer = async (sId: string) => {
     try {
       const res = await fetch(`/api/admin/sessions/${sId}/extend`, { method: 'POST' });
       if (res.ok) {
-        alert('Time remaining successfully expanded (+5 minutes) and unlocked.');
+        triggerSuccess('Time Extended', 'Time remaining successfully expanded (+5 minutes) and unlocked.');
         fetchLiveSessions();
       }
     } catch(e) {}
   };
 
-  const triggerResetSession = async (sId: string) => {
-    if (!confirm('This deletes all recorded exam content drafts of this student session on the server disk, letting them log in and retake it fresh. Proceed?')) return;
-    try {
-      const res = await fetch(`/api/admin/sessions/${sId}/reset`, { method: 'POST' });
-      if (res.ok) {
-        alert('Exam session successfully purged. Student can now retake.');
-        fetchLiveSessions();
+  const triggerResetSession = async (sId: string, testId?: string, studentId?: string) => {
+    requestConfirm(
+      'Reset & Purge Exam Session',
+      'This deletes all recorded exam content drafts of this student session on the server disk, letting them log in and retake it fresh. All scores and logs for this session will be wiped. This is irreversible. Proceed?',
+      async () => {
+        try {
+          const res = await fetch(`/api/admin/sessions/${sId}/reset`, { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ test_id: testId, student_id: studentId })
+          });
+          if (res.ok) {
+            triggerSuccess('Purge Successful', 'Exam session successfully purged. The student can now retake this test fresh.');
+            fetchLiveSessions();
+            fetchGradingQueue();
+          } else {
+            const data = await res.json();
+            triggerAlert('Purge Failed', 'Failed to reset session: ' + (data.error || 'Server error'));
+          }
+        } catch(e: any) {
+          triggerAlert('Network Error', 'Network error: ' + e.message);
+        }
       }
-    } catch(e) {}
+    );
   };
 
   // Grade FRQ essays inline
@@ -738,34 +860,40 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
   const handleRestoreBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!confirm('Warning: Restoring custom ZIP coordinates will override current rosters, exam templates, and results. Are you sure you wish to replace your server database?')) {
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const rawResult = evt.target?.result as string;
-        // Strip data:url prefix to isolate standard base64 string
-        const base64Content = rawResult.split(',')[1];
-        
-        const res = await fetch('/api/admin/restore', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ zipBase64: base64Content })
-        });
-        if (res.ok) {
-          alert('Database restored successfully! Re-syncing panels.');
-          triggerMasterRefresh();
-          window.location.reload();
-        } else {
-          alert('Failed to process restoration ZIP.');
-        }
-      } catch (err: any) {
-        alert('Invalid ZIP archive formatting parser.');
+    const inputEl = e.target;
+    requestConfirm(
+      'Restore Database Backup',
+      'Warning: Restoring custom ZIP coordinates will override current rosters, exam templates, and results. Are you sure you wish to replace your server database? This is irreversible.',
+      async () => {
+        const reader = new FileReader();
+        reader.onload = async (evt) => {
+          try {
+            const rawResult = evt.target?.result as string;
+            // Strip data:url prefix to isolate standard base64 string
+            const base64Content = rawResult.split(',')[1];
+            
+            const res = await fetch('/api/admin/restore', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ zipBase64: base64Content })
+            });
+            if (res.ok) {
+              triggerSuccess('Restore Success', 'Database snapshot was successfully restored. Refreshing app state.');
+              triggerMasterRefresh();
+              setTimeout(() => {
+                window.location.reload();
+              }, 1500);
+            } else {
+              triggerAlert('Restore Failure', 'Failed to process restoration snapshot ZIP.');
+            }
+          } catch (err: any) {
+            triggerAlert('Restoration Error', 'Invalid ZIP archive formatting or parser error.');
+          }
+        };
+        reader.readAsDataURL(file);
       }
-    };
-    reader.readAsDataURL(file);
+    );
+    inputEl.value = '';
   };
 
   const getUptimeString = () => {
@@ -776,10 +904,31 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
     return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
+  const studentsWithInfractions = [
+    ...liveSessions.filter(s => (s.infraction_count || 0) > 0).map(s => ({
+      student_id: s.student_id,
+      student_name: s.student_name,
+      test_id: s.test_id || 'Active Test',
+      infraction_count: s.infraction_count,
+      status: s.status === 'testing' ? 'Active Testing' : s.status === 'dashboard' ? 'On Dashboard' : 'Offline',
+      session_id: s.session_id,
+      is_live: true,
+    })),
+    ...gradingResults.filter(r => (r.infraction_count || 0) > 0).map(r => ({
+      student_id: r.student_id,
+      student_name: r.student_name,
+      test_id: r.test_id,
+      infraction_count: r.infraction_count,
+      status: 'Submitted / Completed',
+      session_id: r.session_id,
+      is_live: false,
+    }))
+  ].filter((v, i, a) => a.findIndex(t => t.student_id === v.student_id && t.session_id === v.session_id) === i);
+
   return (
     <div className="w-full min-h-screen bg-[var(--color-background)] text-[var(--color-on-background)] font-sans flex overflow-hidden selection:bg-[var(--color-primary-container)] selection:text-[var(--color-on-primary-container)]">
       {/* Sidebar Navigation Panel */}
-      <nav className="w-[250px] shrink-0 bg-[var(--color-surface-dim)] border-r border-[var(--color-outline-variant)] flex flex-col p-4 select-none">
+      <nav className="w-[250px] shrink-0 bg-[var(--color-background)] border-r border-[var(--color-outline-variant)] border-solid flex flex-col p-4 select-none">
         <div className="flex items-center gap-3 px-3 py-4 mb-6">
           <div>
             <h1 className="font-extrabold text-sm tracking-tight text-[var(--color-on-surface)] uppercase">LANtern test software</h1>
@@ -789,7 +938,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
         <div className="space-y-1.5 flex-1">
           <button 
             onClick={() => setActiveTab('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-sm transition-all ${activeTab === 'dashboard' ? 'bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)] shadow-lg shadow-violet-950/20' : 'text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-[var(--color-on-surface)]'}`}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-sm font-medium text-sm transition-all border ${activeTab === 'dashboard' ? 'bg-[var(--color-surface-bright)] text-white border-[var(--color-outline)]' : 'border-transparent text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-white'}`}
           >
             <BarChart size={18} />
             Dashboard
@@ -797,7 +946,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
           
           <button 
             onClick={() => setActiveTab('tests')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-sm transition-all ${activeTab === 'tests' ? 'bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)] shadow-lg shadow-violet-950/20' : 'text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-[var(--color-on-surface)]'}`}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-sm font-medium text-sm transition-all border ${activeTab === 'tests' ? 'bg-[var(--color-surface-bright)] text-white border-[var(--color-outline)]' : 'border-transparent text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-white'}`}
           >
             <BookOpen size={18} />
             Tests Blueprint
@@ -805,7 +954,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
           <button 
             onClick={() => setActiveTab('roster')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-sm transition-all ${activeTab === 'roster' ? 'bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)] shadow-lg shadow-violet-950/20' : 'text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-[var(--color-on-surface)]'}`}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-sm font-medium text-sm transition-all border ${activeTab === 'roster' ? 'bg-[var(--color-surface-bright)] text-white border-[var(--color-outline)]' : 'border-transparent text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-white'}`}
           >
             <Users size={18} />
             Roster & Assigned
@@ -813,14 +962,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
           <button 
             onClick={() => setActiveTab('sessions')}
-            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-semibold text-sm transition-all relative ${activeTab === 'sessions' ? 'bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)] shadow-lg shadow-violet-950/20' : 'text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-[var(--color-on-surface)]'}`}
+            className={`w-full flex items-center justify-between px-4 py-2.5 rounded-sm font-medium text-sm transition-all border relative ${activeTab === 'sessions' ? 'bg-[var(--color-surface-bright)] text-white border-[var(--color-outline)]' : 'border-transparent text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-white'}`}
           >
             <div className="flex items-center gap-3">
               <Activity size={18} />
               <span>Live Sessions</span>
             </div>
             {liveSessions.length > 0 && (
-              <span className="bg-[var(--color-success)] text-[var(--color-background)] font-extrabold text-[10px] px-2 py-0.5 rounded-full pulse">
+              <span className="bg-[var(--color-success)] text-[var(--color-background)] font-extrabold text-[10px] px-2 py-0.5 rounded-sm pulse">
                 {liveSessions.length}
               </span>
             )}
@@ -828,14 +977,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
           <button 
             onClick={() => { setActiveTab('grading'); fetchGradingQueue(); }}
-            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-semibold text-sm transition-all relative ${activeTab === 'grading' ? 'bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)] shadow-lg shadow-violet-950/20' : 'text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-[var(--color-on-surface)]'}`}
+            className={`w-full flex items-center justify-between px-4 py-2.5 rounded-sm font-medium text-sm transition-all border relative ${activeTab === 'grading' ? 'bg-[var(--color-surface-bright)] text-white border-[var(--color-outline)]' : 'border-transparent text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-white'}`}
           >
             <div className="flex items-center gap-3">
               <FileText size={18} />
               <span>Grading Center</span>
             </div>
             {gradingQueue.length > 0 && (
-              <span className="bg-[var(--color-warning)] text-[var(--color-background)] font-extrabold text-[10px] px-2 py-0.5 rounded-full font-bold">
+              <span className="bg-[var(--color-warning)] text-[var(--color-background)] font-extrabold text-[10px] px-2 py-0.5 rounded-sm font-bold">
                 {gradingQueue.length}
               </span>
             )}
@@ -843,10 +992,10 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
         </div>
 
         {/* Navigation bottom tier */}
-        <div className="pt-4 border-t border-[var(--color-outline-variant)] space-y-1.5">
+        <div className="pt-4 border-t border-[var(--color-outline-variant)] border-solid space-y-1.5">
           <button 
             onClick={() => setActiveTab('settings')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-sm transition-all ${activeTab === 'settings' ? 'bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)] shadow-lg shadow-violet-950/20' : 'text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-[var(--color-on-surface)]'}`}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-sm font-medium text-sm transition-all border ${activeTab === 'settings' ? 'bg-[var(--color-surface-bright)] text-white border-[var(--color-outline)]' : 'border-transparent text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-white'}`}
           >
             <Settings size={18} />
             System Settings
@@ -854,7 +1003,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
           <button 
             onClick={onLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-sm text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-all"
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-sm font-medium text-sm text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-all border border-transparent"
           >
             <LogOut size={18} />
             Server Logout
@@ -872,7 +1021,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
           <div className="flex items-center gap-4">
             <button 
               onClick={triggerMasterRefresh}
-              className="p-1.5 px-3 border border-[var(--color-outline-variant)] rounded-lg hover:bg-[var(--color-surface-container-high)] text-[var(--color-on-surface-variant)] hover:text-[var(--color-on-surface)] transition-all flex items-center gap-2 text-xs font-semibold"
+              className="p-1.5 px-3 border border-[var(--color-outline-variant)] rounded-sm hover:bg-[var(--color-surface-container-high)] text-[var(--color-on-surface-variant)] hover:text-[var(--color-on-surface)] transition-all flex items-center gap-2 text-xs font-semibold"
               title="Refresh Host Logs Cache"
             >
               <RefreshCw size={12} />
@@ -889,18 +1038,18 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div 
                   onClick={() => setActiveTab('tests')}
-                  className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] hover:border-violet-500/40 p-6 rounded-2xl cursor-pointer hover:shadow-xl transition-all flex flex-col justify-between h-30 transform hover:-translate-y-0.5 active:scale-[0.98]"
+                  className="bg-[var(--color-surface)] border border-solid border-[var(--color-outline-variant)] hover:border-[var(--color-outline)] p-6 rounded-sm cursor-pointer transition-all flex flex-col justify-between h-30"
                 >
                   <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block">Loaded Tests</span>
                   <div className="flex items-baseline gap-2 mt-2">
-                    <span className="text-4xl font-extrabold text-violet-400">{metadata.test_count}</span>
+                    <span className="text-4xl font-extrabold text-[var(--color-primary)]">{metadata.test_count}</span>
                     <span className="text-[10px] text-[var(--color-on-surface-variant)]/70 font-medium">blueprints in tests/*.json</span>
                   </div>
                 </div>
 
                 <div 
                   onClick={() => setActiveTab('sessions')}
-                  className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] hover:border-emerald-500/40 p-6 rounded-2xl cursor-pointer hover:shadow-xl transition-all flex flex-col justify-between h-30 transform hover:-translate-y-0.5 active:scale-[0.98]"
+                  className="bg-[var(--color-surface)] border border-solid border-[var(--color-outline-variant)] hover:border-[var(--color-outline)] p-6 rounded-sm cursor-pointer transition-all flex flex-col justify-between h-30"
                 >
                   <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block">Active Sessions</span>
                   <div className="flex items-baseline gap-2 mt-2">
@@ -911,7 +1060,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                 <div 
                   onClick={() => setActiveTab('roster')}
-                  className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] hover:border-amber-500/40 p-6 rounded-2xl cursor-pointer hover:shadow-xl transition-all flex flex-col justify-between h-30 transform hover:-translate-y-0.5 active:scale-[0.98]"
+                  className="bg-[var(--color-surface)] border border-solid border-[var(--color-outline-variant)] hover:border-[var(--color-outline)] p-6 rounded-sm cursor-pointer transition-all flex flex-col justify-between h-30"
                 >
                   <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block">Registered Roster</span>
                   <div className="flex items-baseline gap-2 mt-2">
@@ -926,33 +1075,33 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 {/* Column One: Action uploaders */}
                 <div className="lg:col-span-2 flex flex-col gap-6">
                   {/* Roster Import Panel */}
-                  <div className="bg-white border border-[#CAC4D0] rounded-3xl p-6 shadow-xs">
-                    <h3 className="font-black text-base text-[#1D1B20] mb-3 flex items-center gap-1.5 border-b border-[#F4F4F4] pb-2">
-                      <Users size={16} className="text-[#6750A4]" /> Roster CSV Loader
+                  <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6">
+                    <h3 className="font-semibold text-sm text-[var(--color-on-surface)] mb-3 flex items-center gap-1.5 border-b border-solid border-[var(--color-outline-variant)] pb-2">
+                      <Users size={16} className="text-[var(--color-primary)]" /> Roster CSV Loader
                     </h3>
                     
-                    <div className="flex items-center justify-between mb-4 bg-[#F3F4F9] p-2.5 rounded-xl">
-                      <span className="text-xs font-semibold text-[#49454F]">Import Strategy</span>
+                    <div className="flex items-center justify-between mb-4 border border-solid border-[var(--color-outline-variant)] p-2.5 rounded-sm">
+                      <span className="text-xs font-semibold text-[var(--color-on-surface-variant)]">Import Strategy</span>
                       <div className="flex gap-1.5">
                         <button 
                           onClick={() => setCsvMergeMode('merge')}
-                          className={`px-3 py-1 text-xs font-bold rounded-lg ${csvMergeMode === 'merge' ? 'bg-[#6750A4] text-white' : 'bg-transparent text-[#49454F] hover:bg-[#1D1B20]/5'}`}
+                          className={`px-3 py-1 text-xs font-bold rounded-sm border ${csvMergeMode === 'merge' ? 'bg-[var(--color-surface-bright)] text-white border-[var(--color-outline)]' : 'bg-transparent text-[var(--color-on-surface-variant)] border-transparent hover:text-white'}`}
                         >
                           Merge Records
                         </button>
                         <button 
                           onClick={() => setCsvMergeMode('replace')}
-                          className={`px-3 py-1 text-xs font-bold rounded-lg ${csvMergeMode === 'replace' ? 'bg-red-600 text-white' : 'bg-transparent text-[#49454F] hover:bg-[#1D1B20]/5'}`}
+                          className={`px-3 py-1 text-xs font-bold rounded-sm border ${csvMergeMode === 'replace' ? 'bg-red-600/20 text-red-500 border-red-500/50' : 'bg-transparent text-[var(--color-on-surface-variant)] border-transparent hover:text-white'}`}
                         >
                           Overwrite DB
                         </button>
                       </div>
                     </div>
 
-                    <label className="flex flex-col items-center justify-center border-2 border-dashed border-[#CAC4D0] hover:border-[#6750A4] hover:bg-[#6750A4]/3 transition-colors rounded-2xl h-36 p-4 text-center cursor-pointer select-none">
-                      <Upload size={28} className="text-[#6750A4] mb-2" />
-                      <span className="text-sm font-bold block text-[#1D1B20]">Import CSV Roster</span>
-                      <span className="text-xs text-[#49454F] mt-1">Accepts student_id, student_name template</span>
+                    <label className="flex flex-col items-center justify-center border-2 border-solid border-[var(--color-outline-variant)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-container)] transition-colors rounded-sm h-36 p-4 text-center cursor-pointer select-none">
+                      <Upload size={28} className="text-[var(--color-primary)] mb-2" />
+                      <span className="text-sm font-bold block text-[var(--color-on-surface)]">Import CSV Roster</span>
+                      <span className="text-xs text-[var(--color-on-surface-variant)] mt-1">Accepts student_id, student_name template</span>
                       <input 
                         type="file" 
                         accept=".csv" 
@@ -965,7 +1114,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                       <a 
                         href={`data:text/csv;charset=utf-8,student_id,student_name,assigned_tests\nS001,Alice Smith,TEST_1;TEST_2\nS002,Bob Jones,TEST_1\nS003,Charlie,TEST_2`}
                         download="roster_template.csv"
-                        className="text-xs text-[#6750A4] hover:underline font-bold flex items-center gap-1"
+                        className="text-xs text-[var(--color-primary)] hover:underline font-bold flex items-center gap-1"
                       >
                         <Download size={12} /> Download Sample Template CSV
                       </a>
@@ -973,18 +1122,18 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                   </div>
 
                   {/* Test Master Import & Export tool */}
-                  <div className="bg-[#FEF7FF] border border-[#CAC4D0] rounded-3xl p-6 shadow-xs space-y-4">
-                    <h3 className="font-black text-base text-[#1D1B20] flex items-center gap-1.5 border-b border-[#F4F4F4]/5 pb-2">
-                      <BookOpen size={16} className="text-[#6750A4]" /> Master Files Config
+                  <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 space-y-4">
+                    <h3 className="font-semibold text-sm text-[var(--color-on-surface)] flex items-center gap-1.5 border-b border-solid border-[var(--color-outline-variant)] pb-2">
+                      <BookOpen size={16} className="text-[var(--color-primary)]" /> Master Files Config
                     </h3>
 
-                    <label className="flex items-center gap-3 w-full border border-[#CAC4D0] bg-white hover:bg-neutral-50 px-4 py-3 rounded-2xl cursor-pointer transition-colors text-sm font-bold">
-                      <div className="p-2 bg-[#6750A4]/10 rounded-xl text-[#6750A4]">
+                    <label className="flex items-center gap-3 w-full border border-[var(--color-outline-variant)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-container)] px-4 py-3 rounded-sm cursor-pointer transition-colors text-sm font-bold">
+                      <div className="p-2 bg-[var(--color-surface-bright)] rounded-sm text-[var(--color-primary)]">
                         <Upload size={16} />
                       </div>
                       <div className="text-left flex-1 min-w-0">
-                        <p className="font-bold text-xs">Import Test Master .json</p>
-                        <p className="text-[10px] text-[#49454F] font-normal truncate">Drag/Drop questions structure file</p>
+                        <p className="font-bold text-xs text-[var(--color-on-surface)]">Import Test Master .json</p>
+                        <p className="text-[10px] text-[var(--color-on-surface-variant)] font-normal truncate">Drag/Drop questions structure file</p>
                       </div>
                       <input 
                         type="file" 
@@ -995,14 +1144,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                     </label>
 
                     {/* Exporter selector */}
-                    <div className="bg-white p-4 rounded-2xl border border-[#CAC4D0] space-y-2">
-                      <span className="text-xs font-bold text-[#49454F] uppercase tracking-wider block">Package Stripped Student JSON</span>
-                      <p className="text-[10px] text-[#49454F] leading-tight mb-2">Removes "correct_mc" answer indicators and FRQ grading rubrics for clean offline deployment packages.</p>
+                    <div className="bg-[var(--color-surface-dim)] p-4 rounded-sm border border-[var(--color-outline-variant)] space-y-2">
+                      <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block">Package Stripped Student JSON</span>
+                      <p className="text-[10px] text-[var(--color-on-surface-variant)] leading-tight mb-2">Removes "correct_mc" answer indicators and FRQ grading rubrics for clean offline deployment packages.</p>
                       
                       <div className="flex gap-2">
                         <select 
                           id="export-test-picker"
-                          className="flex-1 text-xs border border-[#CAC4D0] rounded-lg px-2 py-1.5 bg-white font-medium"
+                          className="flex-1 text-xs border border-[var(--color-outline-variant)] rounded-sm px-2 py-1.5 bg-[var(--color-surface-bright)] text-[var(--color-on-surface)] font-medium outline-none focus:border-[var(--color-outline)]"
                           onChange={(e) => {
                             if (e.target.value) {
                               window.open(`/api/admin/export/student-package/${e.target.value}`);
@@ -1021,10 +1170,10 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 </div>
 
                 {/* Right Column: Test Blueprints List */}
-                <div className="lg:col-span-3 bg-white border border-[#CAC4D0] rounded-3xl flex flex-col overflow-hidden shadow-xs">
-                  <div className="p-5 border-b border-[#CAC4D0] flex justify-between items-center bg-[#FEF7FF]">
-                    <span className="font-black text-base text-[#1D1B20]">Test blueprints directory</span>
-                    <span className="text-xs font-bold tracking-tight bg-[#EADDFF] text-[#21005D] px-3 py-1 rounded-full uppercase">
+                <div className="lg:col-span-3 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm flex flex-col overflow-hidden">
+                  <div className="p-5 border-b border-solid border-[var(--color-outline-variant)] flex justify-between items-center bg-[var(--color-surface-dim)]">
+                    <span className="font-semibold text-sm text-[var(--color-on-surface)]">Test blueprints directory</span>
+                    <span className="text-xs font-bold tracking-tight bg-[var(--color-surface-bright)] text-[var(--color-on-surface)] px-3 py-1 rounded-sm uppercase border border-[var(--color-outline-variant)]">
                       {metadata.test_count} Templates
                     </span>
                   </div>
@@ -1032,7 +1181,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                   <div className="flex-1 overflow-x-auto">
                     <table className="w-full text-left font-medium text-xs">
                       <thead>
-                        <tr className="bg-[#FAF9FD] text-[#49454F] border-b border-[#F4F4F4] uppercase font-bold tracking-wider">
+                        <tr className="bg-[var(--color-surface-bright)] text-[var(--color-on-surface-variant)] border-b border-solid border-[var(--color-outline-variant)] uppercase font-bold tracking-wider">
                           <th className="p-4">TEST ID</th>
                           <th className="p-4">Event Name</th>
                           <th className="p-4 text-center">Structure</th>
@@ -1040,7 +1189,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           <th className="p-4 text-right">Settings</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-[#F4F4F4]">
+                      <tbody className="divide-y divide-dashed divide-[var(--color-outline-variant)]">
                         {tests.length === 0 ? (
                           <tr>
                             <td colSpan={5} className="text-center p-10 text-gray-400">
@@ -1049,22 +1198,22 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           </tr>
                         ) : (
                           tests.map((t) => (
-                            <tr key={t.test_id} className="hover:bg-neutral-50 transition-colors">
-                              <td className="p-4 font-mono font-bold select-all text-[#6750A4]">{t.test_id}</td>
-                              <td className="p-4 font-bold text-sm text-[#1D1B20]">{t.event_name}</td>
-                              <td className="p-4 text-center text-[#49454F] font-mono">{t.mc_count} MC / {t.frq_count} FRQ</td>
+                            <tr key={t.test_id} className="hover:bg-[var(--color-surface-container)] transition-colors">
+                              <td className="p-4 font-mono font-bold select-all text-[var(--color-primary)]">{t.test_id}</td>
+                              <td className="p-4 font-bold text-sm text-[var(--color-on-surface)]">{t.event_name}</td>
+                              <td className="p-4 text-center text-[var(--color-on-surface-variant)] font-mono">{t.mc_count} MC / {t.frq_count} FRQ</td>
                               <td className="p-4 text-center">
                                 {t.active ? (
-                                  <span className="bg-green-100 text-green-800 font-extrabold text-[10px] px-2.5 py-0.5 rounded-full uppercase">Active Broadcast</span>
+                                  <span className="bg-green-100 text-green-800 font-extrabold text-[10px] px-2.5 py-0.5 rounded-sm uppercase">Active Broadcast</span>
                                 ) : (
-                                  <span className="bg-gray-100 text-gray-500 font-extrabold text-[10px] px-2.5 py-0.5 rounded-full uppercase">Hidden</span>
+                                  <span className="bg-gray-100 text-gray-500 font-extrabold text-[10px] px-2.5 py-0.5 rounded-sm uppercase">Hidden</span>
                                 )}
                               </td>
                               <td className="p-4 text-right">
                                 <div className="flex justify-end gap-1.5">
                                   <button 
                                     onClick={() => { setSelectedTestId(t.test_id); setActiveTab('tests'); }}
-                                    className="p-1 px-2.5 bg-[#6750A4]/10 text-[#6750A4] hover:bg-[#6750A4]/20 rounded-md font-bold"
+                                    className="p-1 px-2.5 bg-[var(--color-primary)]/10 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/20 rounded-sm font-bold"
                                   >
                                     Manage
                                   </button>
@@ -1091,19 +1240,19 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
           {activeTab === 'tests' && (
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
               {/* Left sidebar: choice tests list */}
-              <div className="lg:col-span-1 bg-white border border-[#CAC4D0] rounded-3xl p-4 shadow-xs space-y-2">
-                <span className="text-xs font-bold text-[#49454F] uppercase tracking-wider block p-1">Available Blueprints</span>
+              <div className="lg:col-span-1 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-4 shadow-xs space-y-2">
+                <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block p-1">Available Blueprints</span>
                 {tests.map(t => (
                   <button
                     key={t.test_id}
                     onClick={() => setSelectedTestId(t.test_id)}
-                    className={`w-full text-left p-3 rounded-2xl flex items-center justify-between transition-all border ${selectedTestId === t.test_id ? 'bg-[#F2EBFF] text-[#21005D] border-[#6750A4] font-bold' : 'bg-transparent text-[#1D1B20] hover:bg-neutral-50 border-transparent'}`}
+                    className={`w-full text-left p-3 rounded-sm flex items-center justify-between transition-all border ${selectedTestId === t.test_id ? 'bg-[#F2EBFF] text-[#21005D] border-[var(--color-primary)] font-bold' : 'bg-transparent text-[var(--color-on-surface)] hover:bg-[var(--color-surface-container)] border-transparent'}`}
                   >
                     <div className="min-w-0 flex-1">
                       <p className="font-mono text-xs font-bold truncate">{t.test_id}</p>
-                      <p className="text-[11px] text-[#49454F] truncate">{t.event_name}</p>
+                      <p className="text-[11px] text-[var(--color-on-surface-variant)] truncate">{t.event_name}</p>
                     </div>
-                    <ArrowRight size={14} className="text-[#6750A4] shrink-0 ml-1" />
+                    <ArrowRight size={14} className="text-[var(--color-primary)] shrink-0 ml-1" />
                   </button>
                 ))}
               </div>
@@ -1111,32 +1260,32 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
               {/* Center Right workspace column */}
               <div className="lg:col-span-3 space-y-6">
                 {!selectedTestId ? (
-                  <div className="bg-white rounded-3xl border border-[#CAC4D0] p-12 text-center flex flex-col items-center">
+                  <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] p-12 text-center flex flex-col items-center">
                     <BookOpen size={48} className="text-neutral-300 mb-3" />
                     <h3 className="font-bold text-lg">Select a Blueprint file to edit</h3>
                     <p className="text-xs text-gray-500 mt-1 max-w-sm">Pick a test from the left-hand column to adjust prompts, answer definitions, durations, and points live.</p>
                   </div>
                 ) : !activeTestDetail ? (
-                  <div className="bg-white rounded-3xl p-6 text-center animate-pulse">Loading core test metadata from host disk...</div>
+                  <div className="bg-[var(--color-surface)] rounded-sm p-6 text-center animate-pulse">Loading core test metadata from host disk...</div>
                 ) : (
-                  <div className="bg-white rounded-3xl border border-[#CAC4D0] overflow-hidden shadow-xs flex flex-col">
+                  <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] overflow-hidden shadow-xs flex flex-col">
                     {/* Header bar controls */}
-                    <div className="p-6 border-b border-[#CAC4D0] bg-[#FEF7FF] flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="p-6 border-b border-[var(--color-outline-variant)] bg-[var(--color-surface)] flex flex-col md:flex-row md:items-center justify-between gap-4">
                       <div>
-                        <span className="font-mono text-xs font-black text-[#6750A4] bg-[#EADDFF] px-2 py-0.5 rounded uppercase">Master File: tests/{activeTestDetail.test_id}.json</span>
-                        <h2 className="text-xl font-black mt-1 text-[#1D1B20]">{activeTestDetail.event_name}</h2>
+                        <span className="font-mono text-xs font-black text-[var(--color-primary)] bg-[var(--color-surface-bright)] px-2 py-0.5 rounded uppercase">Master File: tests/{activeTestDetail.test_id}.json</span>
+                        <h2 className="text-xl font-black mt-1 text-[var(--color-on-surface)]">{activeTestDetail.event_name}</h2>
                       </div>
                       <div className="flex gap-2">
                         <button 
                           onClick={handleRegradeSubmissions}
-                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-sm flex items-center gap-1.5 shadow-sm transition-all"
                           title="Recalculate multiple-choice scores for completed submissions based on current key definitions"
                         >
                           <RefreshCw size={14} /> Regrade MC Submissions
                         </button>
                         <button 
                           onClick={handleMailBulkGrades}
-                          className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
+                          className="px-4 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-on-primary-container)] text-white text-xs font-bold rounded-sm flex items-center gap-1.5 shadow-sm transition-all"
                           title="Broadcast graded PDF scorecard diagnostic reports over email to all assigned students"
                         >
                           <Mail size={14} /> Email Scorecards
@@ -1146,13 +1295,13 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                             setPreviewTestObj(activeTestDetail);
                             setPreviewCurQ(0);
                           }}
-                          className="px-4 py-2 border border-[#CAC4D0] hover:bg-neutral-50 text-xs font-bold rounded-xl transition-all"
+                          className="px-4 py-2 border border-[var(--color-outline-variant)] hover:bg-[var(--color-surface-container)] text-xs font-bold rounded-sm transition-all"
                         >
                           Preview as Student
                         </button>
                         <button 
                           onClick={handleUpdateTestDetail}
-                          className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-xl flex items-center gap-1 shadow-sm transition-all"
+                          className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-sm flex items-center gap-1 shadow-sm transition-all"
                         >
                           <Save size={14} /> Write Changes
                         </button>
@@ -1160,36 +1309,36 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                     </div>
 
                     {/* Metadata settings card block */}
-                    <div className="p-6 border-b border-[#F4F4F4] grid md:grid-cols-4 gap-4 bg-[#FAF9FD]/50">
+                    <div className="p-6 border-b border-solid border-[var(--color-outline-variant)] grid md:grid-cols-4 gap-4 bg-[var(--color-surface-dim)]/50">
                       <div>
-                        <label className="block text-[10px] font-bold text-[#49454F] uppercase tracking-widest mb-1.5">Exam Blueprint Name</label>
+                        <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Exam Blueprint Name</label>
                         <input 
                           type="text" 
                           value={activeTestDetail.event_name}
                           onChange={(e) => setActiveTestDetail({ ...activeTestDetail, event_name: e.target.value })}
-                          className="w-full text-xs border border-[#CAC4D0] bg-white rounded-xl px-2.5 py-2 font-semibold"
+                          className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2 font-semibold"
                         />
                       </div>
                       
                       <div>
-                        <label className="block text-[10px] font-bold text-[#49454F] uppercase tracking-widest mb-1.5">Timer Duration (Minutes)</label>
+                        <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Timer Duration (Minutes)</label>
                         <input 
                           type="number" 
                           value={activeTestDetail.duration}
                           onChange={(e) => setActiveTestDetail({ ...activeTestDetail, duration: Number(e.target.value) })}
-                          className="w-full text-xs border border-[#CAC4D0] bg-white rounded-xl px-2.5 py-2 font-mono font-bold"
+                          className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2 font-mono font-bold"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-[10px] font-bold text-[#49454F] uppercase tracking-widest mb-1.5">Broadcast Access</label>
+                        <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Broadcast Access</label>
                         <div className="flex items-center gap-1.5 mt-2 select-none">
                           <input 
                             type="checkbox" 
                             id="exam-active-toggle"
                             checked={activeTestDetail.active}
                             onChange={(e) => setActiveTestDetail({ ...activeTestDetail, active: e.target.checked })}
-                            className="w-4 h-4 rounded text-[#6750A4]"
+                            className="w-4 h-4 rounded text-[var(--color-primary)]"
                           />
                           <label htmlFor="exam-active-toggle" className="text-xs font-bold text-[#21005D]">Visible to Student Menu</label>
                         </div>
@@ -1198,10 +1347,10 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                     {/* Question Customizer Section List */}
                     <div className="p-6 space-y-6">
-                      <span className="text-xs font-black text-[#49454F] uppercase tracking-widest block">Core Test Questions ({activeTestDetail.questions.length})</span>
+                      <span className="text-xs font-black text-[var(--color-on-surface-variant)] uppercase tracking-widest block">Core Test Questions ({activeTestDetail.questions.length})</span>
                       
                       {activeTestDetail.questions.map((q, qIdx) => (
-                        <div key={q.id || String(qIdx)} className="border border-[#CAC4D0] rounded-2xl p-5 relative bg-[#FEF7FF]/20 space-y-4">
+                        <div key={q.id || String(qIdx)} className="border border-[var(--color-outline-variant)] rounded-sm p-5 relative bg-[var(--color-surface)]/20 space-y-4">
                           <button 
                             type="button"
                             onClick={() => {
@@ -1217,17 +1366,17 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           {/* Quick question config details */}
                           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <div>
-                              <span className="text-xs font-extrabold text-[#6750A4] font-mono leading-none uppercase block mb-1">Question Number</span>
+                              <span className="text-xs font-extrabold text-[var(--color-primary)] font-mono leading-none uppercase block mb-1">Question Number</span>
                               <input 
                                 type="number" 
                                 value={q.number}
                                 readOnly
-                                className="w-12 text-center text-xs border border-gray-200 bg-gray-50 rounded px-1.5 py-1 font-bold"
+                                className="w-12 text-center text-xs border border-[var(--color-outline-variant)] bg-gray-50 rounded px-1.5 py-1 font-bold"
                               />
                             </div>
 
                             <div>
-                              <span className="text-xs font-extrabold text-[#6750A4] font-mono leading-none uppercase block mb-1">Question Type</span>
+                              <span className="text-xs font-extrabold text-[var(--color-primary)] font-mono leading-none uppercase block mb-1">Question Type</span>
                               <select 
                                 value={q.type}
                                 onChange={(e) => {
@@ -1241,7 +1390,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                   };
                                   setActiveTestDetail({ ...activeTestDetail, questions: updatedQuestions });
                                 }}
-                                className="text-xs border border-[#CAC4D0] bg-white rounded px-2.5 py-1 font-bold"
+                                className="text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded px-2.5 py-1 font-bold"
                               >
                                 <option value="MC"> Multiple Choice (MC)</option>
                                 <option value="FRQ">Free Response (FRQ)</option>
@@ -1249,7 +1398,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                             </div>
 
                             <div>
-                              <span className="text-xs font-extrabold text-[#6750A4] font-mono leading-none uppercase block mb-1">Points Weight</span>
+                              <span className="text-xs font-extrabold text-[var(--color-primary)] font-mono leading-none uppercase block mb-1">Points Weight</span>
                               <input 
                                 type="number" 
                                 value={q.points}
@@ -1258,14 +1407,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                   updated[qIdx] = { ...q, points: Number(e.target.value) };
                                   setActiveTestDetail({ ...activeTestDetail, questions: updated });
                                 }}
-                                className="w-20 text-xs border border-[#CAC4D0] bg-white rounded px-2 py-1 font-mono font-bold"
+                                className="w-20 text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded px-2 py-1 font-mono font-bold"
                               />
                             </div>
                           </div>
 
                           {/* Prompt Editor */}
                           <div>
-                            <span className="text-xs font-bold text-[#49454F] uppercase tracking-wider block mb-1">Question Prompt Text</span>
+                            <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block mb-1">Question Prompt Text</span>
                             <textarea
                               value={q.prompt}
                               onChange={(e) => {
@@ -1274,13 +1423,13 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                 setActiveTestDetail({ ...activeTestDetail, questions: updated });
                               }}
                               placeholder="Describe the question detailed instructions here..."
-                              className="w-full text-xs border border-[#CAC4D0] bg-white rounded-xl p-2.5 h-20"
+                              className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm p-2.5 h-20"
                             />
                           </div>
 
                           {/* Optional Graphic Image URL */}
                           <div>
-                            <span className="text-xs font-bold text-[#49454F] uppercase tracking-wider block mb-1">Optional Graphic Image / Diagram URL</span>
+                            <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block mb-1">Optional Graphic Image / Diagram URL</span>
                             <input 
                               type="text"
                               value={q.image_url || ''}
@@ -1290,14 +1439,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                 setActiveTestDetail({ ...activeTestDetail, questions: updated });
                               }}
                               placeholder="e.g. /images/graph_question_12.png or https://domain.com/picture.jpg (Leave empty if none)"
-                              className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-3 py-2 font-mono text-[#6750A4]"
+                              className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-3 py-2 font-mono text-[var(--color-primary)]"
                             />
                           </div>
 
                           {/* MC Questions logic */}
                           {q.type === 'MC' && q.options && (
-                            <div className="bg-[#FAF9FD] p-4 rounded-xl border border-[#CAC4D0] space-y-2">
-                              <span className="text-xs font-bold text-[#6750A4] uppercase block">Answers Options (A-D) & Correct Indicator:</span>
+                            <div className="bg-[var(--color-surface-dim)] p-4 rounded-sm border border-[var(--color-outline-variant)] space-y-2">
+                              <span className="text-xs font-bold text-[var(--color-primary)] uppercase block">Answers Options (A-D) & Correct Indicator:</span>
                               
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 {Object.keys(q.options).map((key) => (
@@ -1312,14 +1461,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                         updatedQ[qIdx] = { ...q, options: nextOptions };
                                         setActiveTestDetail({ ...activeTestDetail, questions: updatedQ });
                                       }}
-                                      className="flex-1 text-xs border border-[#CAC4D0] bg-white rounded px-2 py-1"
+                                      className="flex-1 text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded px-2 py-1"
                                     />
                                   </div>
                                 ))}
                               </div>
 
-                              <div className="flex items-center gap-1.5 pt-2 border-t border-[#CAC4D0]/50 mt-2">
-                                <span className="text-xs font-bold text-[#49454F]">Correct MC Option Indicator:</span>
+                              <div className="flex items-center gap-1.5 pt-2 border-t border-[var(--color-outline-variant)]/50 mt-2">
+                                <span className="text-xs font-bold text-[var(--color-on-surface-variant)]">Correct MC Option Indicator:</span>
                                 <select 
                                   value={q.correct_mc || 'A'}
                                   onChange={(e) => {
@@ -1327,7 +1476,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                     updated[qIdx] = { ...q, correct_mc: e.target.value };
                                     setActiveTestDetail({ ...activeTestDetail, questions: updated });
                                   }}
-                                  className="text-xs border border-[#CAC4D0] bg-white rounded px-2 py-1 font-mono font-bold"
+                                  className="text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded px-2 py-1 font-mono font-bold"
                                 >
                                   <option value="A">Choice A</option>
                                   <option value="B">Choice B</option>
@@ -1340,7 +1489,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                           {/* FRQ Logic */}
                           {q.type === 'FRQ' && (
-                            <div className="bg-[#FAF9FD] p-4 rounded-xl border border-[#CAC4D0]">
+                            <div className="bg-[var(--color-surface-dim)] p-4 rounded-sm border border-[var(--color-outline-variant)]">
                               <span className="text-xs font-bold text-amber-800 uppercase block mb-1">Administrative Evaluation Rubric Guide:</span>
                               <textarea
                                 value={q.rubric_guide || ''}
@@ -1350,7 +1499,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                   setActiveTestDetail({ ...activeTestDetail, questions: updated });
                                 }}
                                 placeholder="State criteria for full versus partial score point credits here..."
-                                className="w-full text-xs border border-[#CAC4D0] bg-white rounded px-2 py-2 h-16 font-mono"
+                                className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded px-2 py-2 h-16 font-mono"
                               />
                             </div>
                           )}
@@ -1373,7 +1522,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           };
                           setActiveTestDetail({ ...activeTestDetail, questions: [...currentQueries, placeholder] });
                         }}
-                        className="w-full py-4 border-2 border-dashed border-[#CAC4D0] hover:border-[#6750A4] hover:bg-[#6750A4]/3 text-sm font-bold rounded-2xl flex items-center justify-center gap-1.5 transition-colors"
+                        className="w-full py-4 border-2 border-solid border-[var(--color-outline-variant)] hover:border-[var(--color-primary)] hover:bg-[var(--color-primary)]/3 text-sm font-bold rounded-sm flex items-center justify-center gap-1.5 transition-colors"
                       >
                         <PlusCircle size={16} /> Append Question Blueprint #{(activeTestDetail.questions?.length || 0) + 1}
                       </button>
@@ -1389,63 +1538,63 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
               {/* Left sidebar: Create/Modify Form */}
               <div className="lg:col-span-1 space-y-6">
-                <div className={`border rounded-3xl p-5 shadow-xs space-y-4 transition-colors ${editingStudentId ? 'bg-[#FFF8E1] border-amber-300' : 'bg-white border-[#CAC4D0]'}`}>
-                  <h3 className="font-black text-[#1D1B20] text-sm uppercase tracking-wider border-b border-[#F4F4F4] pb-2 flex justify-between items-center">
+                <div className={`border rounded-sm p-5 shadow-xs space-y-4 transition-colors ${editingStudentId ? 'bg-[#FFF8E1] border-amber-300' : 'bg-[var(--color-surface)] border-[var(--color-outline-variant)]'}`}>
+                  <h3 className="font-black text-[var(--color-on-surface)] text-sm uppercase tracking-wider border-b border-solid border-[var(--color-outline-variant)] pb-2 flex justify-between items-center">
                     <span>{editingStudentId ? `Modify: ${editingStudentId}` : 'Single Student Profiler'}</span>
                     {editingStudentId && (
-                      <span className="text-[10px] bg-amber-200 text-amber-900 font-bold px-2 py-0.5 rounded-full select-none uppercase tracking-wide">Editing</span>
+                      <span className="text-[10px] bg-amber-200 text-amber-900 font-bold px-2 py-0.5 rounded-sm select-none uppercase tracking-wide">Editing</span>
                     )}
                   </h3>
                   
                   <div className="space-y-3">
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Student ID (Plain Code)</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Student ID (Plain Code)</label>
                       <input 
                         type="text" 
                         placeholder="e.g. S014" 
                         value={newStudentForm.student_id}
                         onChange={(e) => setNewStudentForm({ ...newStudentForm, student_id: e.target.value })}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-2.5 py-1.5 font-bold"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-1.5 font-bold"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Human Name</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Human Name</label>
                       <input 
                         type="text" 
                         placeholder="e.g. David Miller" 
                         value={newStudentForm.student_name}
                         onChange={(e) => setNewStudentForm({ ...newStudentForm, student_name: e.target.value })}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-2.5 py-1.5 font-semibold"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-1.5 font-semibold"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Student Email Address</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Student Email Address</label>
                       <input 
                         type="email" 
                         placeholder="e.g. david.miller@student.org" 
                         value={newStudentForm.email}
                         onChange={(e) => setNewStudentForm({ ...newStudentForm, email: e.target.value })}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-2.5 py-1.5 font-medium"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-1.5 font-medium"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Assigned Test IDs (Comma or Semicolon separated)</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Assigned Test IDs (Comma or Semicolon separated)</label>
                       <input 
                         type="text" 
                         placeholder="TEST_1, TEST_2" 
                         value={newStudentForm.assigned_str}
                         onChange={(e) => setNewStudentForm({ ...newStudentForm, assigned_str: e.target.value })}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-2.5 py-1.5 font-mono text-xs font-bold text-[#6750A4]"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-1.5 font-mono text-xs font-bold text-[var(--color-primary)]"
                       />
                     </div>
 
                     <div className="flex gap-2">
                       <button 
                         onClick={handleSaveStudent}
-                        className="flex-1 py-2.5 bg-[#6750A4] hover:bg-[#533C8A] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 shadow-xs"
+                        className="flex-1 py-2.5 bg-[var(--color-primary)] hover:bg-[#533C8A] text-white rounded-sm text-xs font-bold transition-all flex items-center justify-center gap-1 shadow-xs"
                       >
                         <PlusCircle size={14} /> {editingStudentId ? 'Update Profile' : 'Commit Profile'}
                       </button>
@@ -1456,7 +1605,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                             setEditingStudentId(null);
                             setNewStudentForm({ student_id: '', student_name: '', assigned_str: '' });
                           }}
-                          className="px-3 py-2.5 bg-neutral-200 hover:bg-neutral-300 text-neutral-800 rounded-xl text-xs font-bold transition-all"
+                          className="px-3 py-2.5 bg-neutral-200 hover:bg-neutral-300 text-neutral-800 rounded-sm text-xs font-bold transition-all"
                         >
                           Cancel
                         </button>
@@ -1466,34 +1615,37 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 </div>
 
                 {/* Bulk assign shortcuts */}
-                <div className="bg-[#FEF7FF] border border-[#CAC4D0] rounded-3xl p-5 shadow-xs space-y-3">
+                <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-5 shadow-xs space-y-3">
                   <h3 className="font-bold text-xs text-[#21005D] uppercase tracking-wider block">Bulk Assign shortcut</h3>
-                  <p className="text-[10px] text-[#49454F]">Select active test to force-append onto ALL registered students profiles at once:</p>
+                  <p className="text-[10px] text-[var(--color-on-surface-variant)]">Select active test to force-append onto ALL registered students profiles at once:</p>
                   
                   <select 
                     id="bulk-test-associater"
-                    className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-2 py-1.5"
-                    onChange={async (e) => {
+                    className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2 py-1.5"
+                    onChange={(e) => {
                       const selTest = e.target.value;
                       if (!selTest || roster.students.length === 0) return;
-                      if (!confirm(`Force assignment of test blueprint ${selTest} to all ${roster.students.length} student profiles?`)) {
-                        e.target.value = '';
-                        return;
-                      }
-
-                      try {
-                        const targetIds = roster.students.map(s => s.student_id);
-                        const res = await fetch('/api/admin/roster/assign', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ studentIds: targetIds, testIds: [selTest] })
-                        });
-                        if (res.ok) {
-                          alert(`Test blueprint associated with all student profiles!`);
-                          fetchRoster();
+                      const selectEl = e.target;
+                      requestConfirm(
+                        'Bulk Assign Blueprint',
+                        `Force assignment of test blueprint "${selTest}" to all ${roster.students.length} student profiles? This overrides or appends to their assigned list.`,
+                        async () => {
+                          try {
+                            const targetIds = roster.students.map(s => s.student_id);
+                            const res = await fetch('/api/admin/roster/assign', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ studentIds: targetIds, testIds: [selTest] })
+                            });
+                            if (res.ok) {
+                              triggerSuccess('Association Success', `Test blueprint successfully associated with all student profiles!`);
+                              fetchRoster();
+                            }
+                          } catch (err) {}
+                          selectEl.value = '';
                         }
-                      } catch (err) {}
-                      e.target.value = '';
+                      );
+                      selectEl.value = '';
                     }}
                   >
                     <option value="">-- Apply Test to All --</option>
@@ -1505,14 +1657,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
               </div>
 
               {/* Tabular registry list column */}
-              <div className="lg:col-span-3 bg-white border border-[#CAC4D0] rounded-3xl flex flex-col overflow-hidden shadow-xs">
-                <div className="p-5 border-b border-[#CAC4D0] flex justify-between items-center bg-[#FEF7FF]">
-                  <span className="font-black text-base text-[#1D1B20]">Tabular registered roster</span>
+              <div className="lg:col-span-3 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm flex flex-col overflow-hidden shadow-xs">
+                <div className="p-5 border-b border-[var(--color-outline-variant)] flex justify-between items-center bg-[var(--color-surface)]">
+                  <span className="font-black text-base text-[var(--color-on-surface)]">Tabular registered roster</span>
                   
                   <a 
                     href={`data:text/csv;charset=utf-8,student_id,student_name,assigned_tests\n${roster.students.map(s => `${s.student_id},"${s.student_name}","${s.assigned_tests.join(';')}"`).join('\n')}`}
                     download="lan_server_roster_dump.csv"
-                    className="px-3 py-1.5 bg-[#6750A4] hover:bg-[#533C8A] text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-xs"
+                    className="px-3 py-1.5 bg-[var(--color-primary)] hover:bg-[#533C8A] text-white text-xs font-bold rounded-sm flex items-center gap-1 shadow-xs"
                   >
                     <Download size={12} /> Export CSV Backup
                   </a>
@@ -1521,14 +1673,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 <div className="flex-1 overflow-x-auto">
                   <table className="w-full text-left font-medium text-xs">
                     <thead>
-                      <tr className="bg-[#FAF9FD] text-[#49454F] border-b border-[#F4F4F4] uppercase font-bold tracking-wider">
+                      <tr className="bg-[var(--color-surface-dim)] text-[var(--color-on-surface-variant)] border-b border-solid border-[var(--color-outline-variant)] uppercase font-bold tracking-wider">
                         <th className="p-4">Student ID</th>
                         <th className="p-4">Student Name</th>
                         <th className="p-4">Assigned Test Blueprints</th>
                         <th className="p-4 text-right">Settings</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#F4F4F4]">
+                    <tbody className="divide-y divide-dashed divide-[var(--color-outline-variant)]">
                       {roster.students.length === 0 ? (
                         <tr>
                           <td colSpan={4} className="text-center p-10 text-gray-400">
@@ -1537,10 +1689,10 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                         </tr>
                       ) : (
                         roster.students.map((s) => (
-                          <tr key={s.student_id} className="hover:bg-neutral-50 transition-colors">
-                            <td className="p-4 font-mono font-extrabold text-[#6750A4] select-all uppercase">{s.student_id}</td>
+                          <tr key={s.student_id} className="hover:bg-[var(--color-surface-container)] transition-colors">
+                            <td className="p-4 font-mono font-extrabold text-[var(--color-primary)] select-all uppercase">{s.student_id}</td>
                             <td className="p-4">
-                              <div className="font-bold text-[#1D1B20] text-sm">{s.student_name}</div>
+                              <div className="font-bold text-[var(--color-on-surface)] text-sm">{s.student_name}</div>
                               {s.email ? (
                                 <div className="text-[10px] font-mono text-neutral-500 mt-0.5">{s.email}</div>
                               ) : (
@@ -1551,7 +1703,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                               <div className="flex flex-wrap gap-1">
                                 {s.assigned_tests && s.assigned_tests.length > 0 ? (
                                   s.assigned_tests.map((at) => (
-                                    <span key={at} className="bg-[#EADDFF] text-[#21005D] text-[10px] font-bold px-2 py-0.5 rounded font-mono border border-[#D0BCFF]">
+                                    <span key={at} className="bg-[var(--color-surface-bright)] text-[#21005D] text-[10px] font-bold px-2 py-0.5 rounded font-mono border border-[var(--color-outline-variant)]">
                                       {at}
                                     </span>
                                   ))
@@ -1567,7 +1719,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                     setNewStudentForm({ student_id: s.student_id, student_name: s.student_name, email: s.email || '', assigned_str: s.assigned_tests.join(', ') });
                                     setEditingStudentId(s.student_id);
                                   }}
-                                  className="p-1 text-[#6750A4] hover:bg-[#6750A4]/10 rounded"
+                                  className="p-1 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 rounded"
                                   title="Edit student profile details"
                                 >
                                   <Edit size={14} />
@@ -1592,66 +1744,173 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
           {/* SECTION 4: LIVE MONITORING */}
           {activeTab === 'sessions' && (
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 animate-fadeIn">
-              {/* Left Column (2 cols wide): Actively Testing devices checklist */}
-              <div className="xl:col-span-2 bg-white border border-[#CAC4D0] rounded-3xl overflow-hidden shadow-xs flex flex-col h-fit">
-                <div className="p-5 border-b border-[#CAC4D0] flex justify-between items-center bg-[#FEF7FF]">
+            <div className="space-y-6 animate-fadeIn">
+              {/* PROCTORING INTEGRITY ALERTS PANEL */}
+              <div className="bg-[var(--color-surface)] border border-red-500/20 rounded-sm p-6 shadow-sm border-solid">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-solid border-[var(--color-outline-variant)] pb-3 mb-4 gap-2">
                   <div>
-                    <span className="font-black text-base text-[#1D1B20] block">Connected local device screens</span>
-                    <span className="text-xs text-[#49454F] block mt-0.5">Showing only student desks currently actively in the <strong>testing state</strong>.</span>
+                    <h3 className="font-extrabold text-sm text-[var(--color-on-surface)] flex items-center gap-2 uppercase tracking-wide">
+                      <AlertCircle size={18} className="text-red-500 animate-pulse" /> Proctoring Integrity & Focus-Loss Monitor
+                    </h3>
+                    <p className="text-[11px] text-[var(--color-on-surface-variant)] mt-0.5">Real-time alerts tracking when students navigate away, click out of the frame, switch tabs, or close their test files.</p>
                   </div>
-                  <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1 rounded-full text-xs font-black uppercase inline-flex items-center gap-1.5 animate-pulse">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                    {liveSessions.filter(s => s.status === 'testing').length} Desks Testing
+                  <span className={`px-2.5 py-1 text-[10px] font-black tracking-wider uppercase rounded-sm border select-none ${
+                    studentsWithInfractions.length > 0 
+                      ? 'bg-red-500/10 text-red-600 border-red-500/20 animate-pulse' 
+                      : 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                  }`}>
+                    {studentsWithInfractions.length > 0 ? `⚠️ ${studentsWithInfractions.length} Alert(s) Pending` : '✅ All Devices Compliant'}
+                  </span>
+                </div>
+
+                {studentsWithInfractions.length === 0 ? (
+                  <div className="flex items-center gap-3 p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-sm text-xs text-emerald-700 border-solid">
+                    <span className="p-1 px-2 bg-emerald-500/20 rounded-full text-emerald-600 shrink-0 font-bold select-none">✔</span>
+                    <div>
+                      <p className="font-bold">Complete Compliance Observed</p>
+                      <p className="text-[10px] opacity-90">No students currently taking exams have switched tabs, minimized windows, or abandoned their exams.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[300px] overflow-y-auto pr-2">
+                    {studentsWithInfractions.map((entry) => (
+                      <div key={`${entry.student_id}-${entry.session_id}-${entry.is_live}`} className="bg-red-500/[0.02] border border-solid border-red-500/15 hover:border-red-500/35 rounded-sm p-4 space-y-3 transition-colors flex flex-col justify-between">
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-start gap-2">
+                            <div className="min-w-0">
+                              <span className="font-mono text-[9px] font-black text-red-600 bg-red-100/60 uppercase px-1.5 py-0.5 rounded select-all">{entry.student_id}</span>
+                              <p className="font-extrabold text-sm text-[var(--color-on-surface)] mt-1 truncate">{entry.student_name}</p>
+                            </div>
+                            <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border border-solid shrink-0 ${
+                              entry.is_live 
+                                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
+                                : 'bg-zinc-500/10 text-zinc-600 border-zinc-500/20'
+                            }`}>
+                              {entry.status}
+                            </span>
+                          </div>
+                          
+                          <div className="text-[11px] text-[var(--color-on-surface-variant)] space-y-1 font-sans">
+                            <p className="truncate">Blueprint: <strong>{entry.test_id}</strong></p>
+                            <p className="flex items-center gap-1 text-red-600 font-extrabold bg-red-500/5 px-2 py-0.5 rounded-sm border border-solid border-red-500/10 w-fit">
+                              <AlertCircle size={11} className="shrink-0" /> Left test frame: <strong className="text-red-700">{entry.infraction_count} times</strong>
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end gap-1.5 pt-2 border-t border-dashed border-red-500/10">
+                          {entry.is_live ? (
+                            <>
+                              <button 
+                                onClick={() => triggerForceSubmit(entry.session_id)}
+                                className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold rounded-sm transition-colors cursor-pointer shadow-2xs"
+                              >
+                                Force Submit
+                              </button>
+                              <button 
+                                onClick={() => triggerResetSession(entry.session_id, entry.test_id, entry.student_id)}
+                                className="px-2 py-1 bg-zinc-100 border border-zinc-200 text-zinc-700 hover:bg-zinc-200 text-[10px] font-bold rounded-sm transition-colors cursor-pointer"
+                              >
+                                Reset
+                              </button>
+                            </>
+                          ) : (
+                            <button 
+                              onClick={() => handleViewStudentResponses(entry.session_id)}
+                              className="px-2.5 py-1 bg-[var(--color-surface-bright)] border border-solid border-[var(--color-outline-variant)] hover:bg-[#D0BCFF] text-[#21005D] text-[10px] font-black uppercase rounded-sm transition-colors inline-flex items-center gap-1 shadow-2xs cursor-pointer"
+                            >
+                              <Eye size={10} /> Examine Answers
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+              {/* Left Column (2 cols wide): Actively Testing devices checklist */}
+              <div className="xl:col-span-2 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm overflow-hidden shadow-xs flex flex-col h-fit">
+                <div className="p-5 border-b border-[var(--color-outline-variant)] flex justify-between items-center bg-[var(--color-surface)]">
+                  <div>
+                    <span className="font-black text-base text-[var(--color-on-surface)] block">Connected local device screens</span>
+                    <span className="text-xs text-[var(--color-on-surface-variant)] block mt-0.5">Showing all student desks with open, active exam drafts. Real-time alerts are raised if the student closes their page or switches tabs.</span>
+                  </div>
+                  <span className="bg-red-50 text-red-800 border border-red-200 px-3 py-1 rounded-sm text-xs font-black uppercase inline-flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 rounded-sm bg-red-500 animate-pulse"></span>
+                    {liveSessions.filter(s => !s.session_id.includes('-temp-session')).length} Desk(s) In-Progress
                   </span>
                 </div>
 
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs font-medium font-sans">
                     <thead>
-                      <tr className="bg-[#FAF9FD] text-[#49454F] border-b border-[#CAC4D0] uppercase font-bold tracking-wider text-[10px]">
+                      <tr className="bg-[var(--color-surface-dim)] text-[var(--color-on-surface-variant)] border-b border-[var(--color-outline-variant)] uppercase font-bold tracking-wider text-[10px]">
                         <th className="p-4">Student Name / ID</th>
                         <th className="p-4 text-center font-bold">Aesthetic Status state</th>
                         <th className="p-4 text-right">In-Line Controls</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#F4F4F4]">
-                      {liveSessions.filter(s => s.status === 'testing').length === 0 ? (
+                    <tbody className="divide-y divide-dashed divide-[var(--color-outline-variant)]">
+                      {liveSessions.filter(s => !s.session_id.includes('-temp-session')).length === 0 ? (
                         <tr>
                           <td colSpan={3} className="text-center p-12 text-gray-400">
                             <div className="space-y-2">
                               <p className="font-bold text-sm text-neutral-600">No active test-takers online</p>
-                              <p className="text-xs text-neutral-400 max-w-md mx-auto">None of the registered students are currently actively inside a test taking workspace. Logged-in students resting on the home dashboard screen are hidden here to avoid supervisor clutter.</p>
+                              <p className="text-xs text-neutral-400 max-w-md mx-auto">No students have active exam drafts in-progress. Once a student clicks "Start Test", their real-time desk trace is locked here until they submit.</p>
                             </div>
                           </td>
                         </tr>
                       ) : (
-                        liveSessions.filter(s => s.status === 'testing').map((session) => {
+                        liveSessions.filter(s => !s.session_id.includes('-temp-session')).map((session) => {
                           const isTempSession = session.session_id.includes('-temp-session');
                           const hasInfractions = (session.infraction_count || 0) > 0;
+                          const isOnline = session.status === 'testing';
+                          const isDashboard = session.status === 'dashboard';
+                          const isOffline = session.status === 'offline';
                           return (
-                            <tr key={session.student_id} className={`transition-colors ${hasInfractions ? 'bg-red-50 hover:bg-red-100 border-l-4 border-red-600' : 'hover:bg-neutral-50'}`}>
+                            <tr key={session.student_id} className={`transition-all ${hasInfractions ? 'bg-red-50/70 hover:bg-red-100 border-l-4 border-red-600' : 'hover:bg-[var(--color-surface-container)]'}`}>
                               <td className="p-4">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <span className="text-xs font-mono font-black text-[#6750A4] uppercase select-all bg-[#FEF7FF] border border-[#EADDFF] px-1.5 py-0.5 rounded mr-1">{session.student_id}</span>
-                                  <span className="font-black text-sm text-[#1D1B20]">{session.student_name}</span>
+                                  <span className="text-xs font-mono font-black text-[var(--color-primary)] uppercase select-all bg-[var(--color-surface)] border border-[var(--color-outline-variant)] px-1.5 py-0.5 rounded mr-1">{session.student_id}</span>
+                                  <span className="font-black text-sm text-[var(--color-on-surface)]">{session.student_name}</span>
                                   {hasInfractions && (
-                                    <span className="bg-red-600 text-white border border-red-700 text-[10px] font-black tracking-wider uppercase px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0 animate-pulse">
-                                      <AlertCircle size={10} className="text-white inline" /> Left test window ({session.infraction_count})
+                                    <span className="bg-red-600 text-white border border-red-700 text-[10px] font-black tracking-wider uppercase px-2 py-0.5 rounded-sm flex items-center gap-1 shrink-0 animate-pulse border-solid">
+                                      <AlertCircle size={10} className="text-white inline animate-none" /> Left test window ({session.infraction_count})
+                                    </span>
+                                  )}
+                                  {isOffline && (
+                                    <span className="bg-red-100 text-transparent border border-solid border-red-200 text-[9px] font-black uppercase px-2 py-0.5 rounded-sm shrink-0 text-red-600">
+                                      OFFLINE / TERM CLOSED
                                     </span>
                                   )}
                                 </div>
                               </td>
                               <td className="p-4 text-center select-none">
                                 <div className="flex flex-col items-center justify-center">
-                                  <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs px-3.5 py-1.5 rounded-full inline-flex items-center gap-2 shadow-2xs font-extrabold font-sans">
-                                    <span className="relative flex h-2 w-2">
-                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600"></span>
+                                  {isOnline ? (
+                                    <span className="bg-emerald-50 text-emerald-800 border border-solid border-emerald-200 text-xs px-3.5 py-1.5 rounded-sm inline-flex items-center gap-2 shadow-2xs font-extrabold font-sans">
+                                      <span className="relative flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-sm bg-emerald-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-sm h-2 w-2 bg-emerald-600"></span>
+                                      </span>
+                                      <span>TESTING: {session.test_id}</span>
                                     </span>
-                                    <span>TESTING: {session.test_id}</span>
-                                  </span>
-                                  {session.expires_at && (
+                                  ) : isDashboard ? (
+                                    <span className="bg-amber-50 text-amber-800 border border-solid border-amber-200 text-xs px-3.5 py-1.5 rounded-sm inline-flex items-center gap-2 shadow-2xs font-extrabold font-sans">
+                                      <span className="relative flex h-2 w-2">
+                                        <span className="relative inline-flex rounded-sm h-2 w-2 bg-amber-500"></span>
+                                      </span>
+                                      <span>RESTING ON HOME: {session.test_id}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="bg-zinc-100 text-zinc-500 border border-solid border-zinc-300 text-xs px-3.5 py-1.5 rounded-sm inline-flex items-center gap-1.5 shadow-2xs font-extrabold font-sans">
+                                      <span className="h-1.5 w-1.5 rounded-sm bg-zinc-400"></span>
+                                      <span>OFFLINE / TERM CLOSED: {session.test_id}</span>
+                                    </span>
+                                  )}
+                                  {session.expires_at && !isOffline && (
                                     <LiveSessionCountdown expiresAt={session.expires_at} />
                                   )}
                                 </div>
@@ -1662,21 +1921,21 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                     <>
                                       <button
                                         onClick={() => triggerForceSubmit(session.session_id)}
-                                        className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold rounded-lg shadow-xs transition-colors"
+                                        className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold rounded-sm shadow-xs transition-colors"
                                         title="Forces automatic submit and locks questionnaire"
                                       >
                                         Force Submit
                                       </button>
                                       <button
                                         onClick={() => triggerExtendTimer(session.session_id)}
-                                        className="px-2.5 py-1.5 border border-[#CAC4D0] hover:bg-neutral-50 text-[11px] font-bold rounded-lg text-[#1D1B20] transition-colors"
+                                        className="px-2.5 py-1.5 border border-[var(--color-outline-variant)] hover:bg-[var(--color-surface-container)] text-[11px] font-bold rounded-sm text-[var(--color-on-surface)] transition-colors"
                                         title="Expand available timeline (+5 minutes)"
                                       >
                                         +5 Min
                                       </button>
                                       <button
-                                        onClick={() => triggerResetSession(session.session_id)}
-                                        className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-[11px] font-bold transition-colors"
+                                        onClick={() => triggerResetSession(session.session_id, session.test_id, session.student_id)}
+                                        className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-sm text-[11px] font-bold transition-colors"
                                         title="Delete cached session to let student restart"
                                       >
                                         Reset
@@ -1698,23 +1957,23 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
               {/* Right Column (1 col wide): Supervisor manual commands override */}
               <div className="xl:col-span-1 space-y-6">
-                <div className="bg-white border border-[#CAC4D0] rounded-3xl p-5 shadow-xs space-y-4">
-                  <h3 className="font-black text-base text-[#1D1B20] border-b border-[#F4F4F4] pb-2 flex items-center gap-1.5">
+                <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-5 shadow-xs space-y-4">
+                  <h3 className="font-black text-base text-[var(--color-on-surface)] border-b border-solid border-[var(--color-outline-variant)] pb-2 flex items-center gap-1.5">
                     <ShieldCheck size={18} className="text-red-600 animate-pulse" /> Supervisor Command Override deck
                   </h3>
                   
-                  <p className="text-xs text-[#49454F] leading-relaxed">
+                  <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
                     Force administrative operations onto <strong>any student profile</strong>, even if they have locked up, closed their laptop browser tab, or displays as <em>offline</em>.
                   </p>
 
                   <div className="space-y-4 pt-1">
                     {/* Student Select dropdown */}
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1.5">1. Target student profile</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1.5">1. Target student profile</label>
                       <select 
                         value={overrideStudentId}
                         onChange={(e) => setOverrideStudentId(e.target.value)}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-2.5 py-2 font-semibold"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2 font-semibold"
                       >
                         <option value="">-- Select Registered Student --</option>
                         {liveSessions.map((s) => {
@@ -1731,9 +1990,9 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                     {/* Action Select radio-group */}
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-2">2. Action command trigger</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-2">2. Action command trigger</label>
                       <div className="space-y-2">
-                        <label className="flex items-start gap-2.5 p-2 rounded-lg border border-neutral-100 hover:bg-neutral-50 cursor-pointer text-xs">
+                        <label className="flex items-start gap-2.5 p-2 rounded-sm border border-neutral-100 hover:bg-[var(--color-surface-container)] cursor-pointer text-xs">
                           <input 
                             type="radio" 
                             name="override-action-radio" 
@@ -1748,7 +2007,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           </div>
                         </label>
 
-                        <label className="flex items-start gap-2.5 p-2 rounded-lg border border-neutral-100 hover:bg-neutral-50 cursor-pointer text-xs">
+                        <label className="flex items-start gap-2.5 p-2 rounded-sm border border-neutral-100 hover:bg-[var(--color-surface-container)] cursor-pointer text-xs">
                           <input 
                             type="radio" 
                             name="override-action-radio" 
@@ -1763,7 +2022,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           </div>
                         </label>
 
-                        <label className="flex items-start gap-2.5 p-2 rounded-lg border border-neutral-100 hover:bg-neutral-50 cursor-pointer text-xs">
+                        <label className="flex items-start gap-2.5 p-2 rounded-sm border border-neutral-100 hover:bg-[var(--color-surface-container)] cursor-pointer text-xs">
                           <input 
                             type="radio" 
                             name="override-action-radio" 
@@ -1783,25 +2042,33 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                     {/* Invoke Button */}
                     <button
                       onClick={async () => {
-                        if (!overrideStudentId) return alert('Select a student profile first.');
+                        if (!overrideStudentId) {
+                          triggerAlert('Selection Required', 'Please select a student profile first before firing supervisor override commands.');
+                          return;
+                        }
                         const sEntry = liveSessions.find(s => s.student_id === overrideStudentId);
                         if (!sEntry || sEntry.session_id.includes('-temp-session')) {
-                          return alert('This student does not have an active session in progress on the server disk to override.');
+                          triggerAlert('No Active Session', 'This student does not have an active session in progress on the server disk to override.');
+                          return;
                         }
                         
                         const actionName = overrideActionType === 'force-submit' ? 'Force Submit' : overrideActionType === 'reset' ? 'Reset/Purge' : 'Extend Timer (+5m)';
-                        if (!confirm(`Are you sure you want to trigger manual [${actionName}] override command for student [${sEntry.student_name}]?`)) return;
-
-                        if (overrideActionType === 'force-submit') {
-                          await triggerForceSubmit(sEntry.session_id);
-                          alert(`Command [${actionName}] successfully executed.`);
-                        } else if (overrideActionType === 'reset') {
-                          await triggerResetSession(sEntry.session_id);
-                        } else if (overrideActionType === 'extend') {
-                          await triggerExtendTimer(sEntry.session_id);
-                        }
+                        requestConfirm(
+                          `Supervisor Override Command`,
+                          `Are you sure you want to trigger manual [${actionName}] override command for student [${sEntry.student_name}]?`,
+                          async () => {
+                            if (overrideActionType === 'force-submit') {
+                              await triggerForceSubmit(sEntry.session_id);
+                              triggerSuccess('Execution Successful', `Supervisor Command [${actionName}] was successfully dispatched to the server workspace.`);
+                            } else if (overrideActionType === 'reset') {
+                              await triggerResetSession(sEntry.session_id, sEntry.test_id, sEntry.student_id);
+                            } else if (overrideActionType === 'extend') {
+                              await triggerExtendTimer(sEntry.session_id);
+                            }
+                          }
+                        );
                       }}
-                      className="w-full py-3 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-extrabold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md shadow-red-200"
+                      className="w-full py-3 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-extrabold rounded-sm text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md shadow-red-200"
                     >
                       <ShieldCheck size={14} /> Fire Override Command
                     </button>
@@ -1809,16 +2076,16 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 </div>
 
                 {/* Aesthetic live monitor card */}
-                <div className="bg-[#FAF9FD] border border-[#CAC4D0] rounded-3xl p-5 shadow-xs space-y-2">
+                <div className="bg-[var(--color-surface-dim)] border border-[var(--color-outline-variant)] rounded-sm p-5 shadow-xs space-y-2">
                   <h4 className="font-bold text-xs text-[#21005D] uppercase tracking-wide flex items-center gap-1">
-                    <span className="h-2 w-2 rounded-full bg-amber-500"></span> Desks heartbeat summary
+                    <span className="h-2 w-2 rounded-sm bg-amber-500"></span> Desks heartbeat summary
                   </h4>
                   <div className="grid grid-cols-2 gap-3 text-xs pt-1">
-                    <div className="bg-white border rounded-xl p-2.5">
+                    <div className="bg-[var(--color-surface)] border rounded-sm p-2.5">
                       <span className="text-[10px] text-gray-500 font-bold uppercase block">Dashboard Home</span>
                       <span className="text-sm font-black text-amber-700">{liveSessions.filter(s => s.status === 'dashboard').length} devices</span>
                     </div>
-                    <div className="bg-white border rounded-xl p-2.5">
+                    <div className="bg-[var(--color-surface)] border rounded-sm p-2.5">
                       <span className="text-[10px] text-gray-500 font-bold uppercase block">Offline Desks</span>
                       <span className="text-sm font-black text-gray-600">{liveSessions.filter(s => s.status === 'offline').length} devices</span>
                     </div>
@@ -1826,21 +2093,22 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
           {/* SECTION 5: GRADING & ESSAY EVALUATION QUEUE */}
           {activeTab === 'grading' && (
             <div className="space-y-6">
               {/* Selector Tabs Inside Grading */}
-              <div className="bg-white border border-[#CAC4D0] rounded-3xl p-6 shadow-xs">
-                <div className="flex justify-between items-center border-b border-[#F4F4F4] pb-4 mb-4">
+              <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 shadow-xs">
+                <div className="flex justify-between items-center border-b border-solid border-[var(--color-outline-variant)] pb-4 mb-4">
                   <div>
-                    <h2 className="text-lg font-black text-[#1D1B20]">Grading center evaluations</h2>
-                    <p className="text-xs text-[#49454F] mt-0.5">Auto-graded MCQ results and custom grading workflows for essays.</p>
+                    <h2 className="text-lg font-black text-[var(--color-on-surface)]">Grading center evaluations</h2>
+                    <p className="text-xs text-[var(--color-on-surface-variant)] mt-0.5">Auto-graded MCQ results and custom grading workflows for essays.</p>
                   </div>
                   <button 
                     onClick={() => window.open('/api/admin/export/results')}
-                    className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-xl shadow-xs inline-flex items-center gap-1"
+                    className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-sm shadow-xs inline-flex items-center gap-1"
                   >
                     <Download size={14} /> Compile & Export CSV Results
                   </button>
@@ -1848,43 +2116,78 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                 <div className="space-y-6">
                   {/* AI Autograding Control Deck */}
-                  <div className="bg-[#FAF9FD] border border-[#EADDFF] rounded-2xl p-6 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-violet-100 rounded-full blur-3xl opacity-50 -mr-6 -mt-6"></div>
+                  <div className="bg-[var(--color-surface-dim)] border border-[var(--color-outline-variant)] rounded-sm p-6 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-surface-dim)] rounded-sm blur-3xl opacity-50 -mr-6 -mt-6"></div>
                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
                       <div className="space-y-2">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#EADDFF] text-[#21005D] text-[10px] font-black uppercase tracking-wider rounded-full">
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-[var(--color-surface-bright)] text-[#21005D] text-[10px] font-black uppercase tracking-wider rounded-sm">
                           <Sparkles size={11} /> Gemini 3.5 Assistant Powered
                         </div>
-                        <h3 className="text-base font-black text-[#1D1B20]">AI-Assisted Short Essay Evaluations</h3>
-                        <p className="text-xs text-[#49454F] max-w-xl">
+                        <h3 className="text-base font-black text-[var(--color-on-surface)]">AI-Assisted Short Essay Evaluations</h3>
+                        <p className="text-xs text-[var(--color-on-surface-variant)] max-w-xl">
                           Automatically evaluate qualitative student essay responses against your uploaded teacher rubric guides in real-time. Results are recorded server-side for each student result folder on completion.
                         </p>
 
-                        <div className="grid grid-cols-3 gap-4 pt-2">
-                          <div className="bg-white border border-gray-100 p-3 rounded-xl shadow-xs">
-                            <span className="text-[10px] font-bold text-gray-400 uppercase block">Total Essays</span>
-                            <span className="text-lg font-black text-gray-900">{gradingQueue.length}</span>
+                        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 pt-2">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-3 rounded-sm shadow-xs">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase block font-sans">Total Essays</span>
+                            <span className="text-lg font-black text-gray-900 block truncate font-mono">{gradingQueue.length}</span>
                           </div>
-                          <div className="bg-white border border-gray-100 p-3 rounded-xl shadow-xs">
-                            <span className="text-[10px] font-bold text-green-500 uppercase block font-medium">Graded</span>
-                            <span className="text-lg font-black text-green-600">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-3 rounded-sm shadow-xs">
+                            <span className="text-[10px] font-bold text-green-500 uppercase block font-medium font-sans">Graded</span>
+                            <span className="text-lg font-black text-green-600 block truncate font-mono">
                               {gradingQueue.filter(q => q.grade).length}
                             </span>
                           </div>
-                          <div className="bg-white border border-gray-100 p-3 rounded-xl shadow-xs">
-                            <span className="text-[10px] font-bold text-amber-500 uppercase block font-medium">Pending AI</span>
-                            <span className="text-lg font-black text-amber-600">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-3 rounded-sm shadow-xs">
+                            <span className="text-[10px] font-bold text-amber-500 uppercase block font-medium font-sans">Pending AI</span>
+                            <span className="text-lg font-black text-amber-600 block truncate font-mono">
                               {gradingQueue.filter(q => !q.grade).length}
                             </span>
                           </div>
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-3 rounded-sm shadow-xs">
+                            <span className="text-[10px] font-bold text-emerald-600 uppercase block font-sans">Gemini Tokens Left</span>
+                            <span className="text-md font-black text-emerald-700 block truncate font-mono mt-1">
+                              {secretsStatus?.gemini_usage_left !== undefined 
+                                ? `${secretsStatus.gemini_usage_left.toLocaleString()} / ${secretsStatus.gemini_quota_limit?.toLocaleString()}` 
+                                : '1,500,000 / 1,500,000'}
+                            </span>
+                          </div>
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-3 rounded-sm shadow-xs">
+                            <span className="text-[10px] font-bold text-amber-600 uppercase block font-sans">Grading Left (Est)</span>
+                            <span className="text-md font-black text-amber-700 block truncate font-mono mt-1">
+                              {secretsStatus?.estimated_frqs_left !== undefined 
+                                ? `${secretsStatus.estimated_frqs_left.toLocaleString()} FRQs` 
+                                : '1,000 FRQs'}
+                            </span>
+                          </div>
                         </div>
+
+                        <div className="pt-2 text-[10px] text-zinc-400 font-sans flex items-center gap-1.5">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          <span>Simulated token budget resets automatically every calendar day. Gemini autograding will automatically pause if the budget is fully depleted to prevent overages.</span>
+                        </div>
+
+                        {gradingQueue.filter(q => !q.grade).length > 0 && (
+                          <div className="space-y-1.5 mt-2">
+                            {hasEnoughBudget ? (
+                              <div className="text-[11px] text-[#21005D] bg-[#EADDFF]/40 border border-[#D0BCFF] px-3 py-1.5 rounded-sm inline-block font-mono">
+                                ✨ Outstanding Demand: ~<strong>{outstandingDemandSum.toLocaleString()}</strong> tokens. Tracked budget is healthy!
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-amber-700 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-sm inline-block font-mono">
+                                ⚠️ Demand Overflow: ~<strong>{outstandingDemandSum.toLocaleString()}</strong> tokens required. This exceeds current token limit. Grading will safely pause once the daily limit is reached.
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex flex-col items-stretch md:items-end justify-center min-w-[200px]">
                         {isAutograding ? (
                           <div className="space-y-2 w-full text-center md:text-right">
-                            <div className="inline-flex items-center gap-2 text-xs font-bold text-[#6750A4]">
-                              <span className="animate-spin rounded-full h-3 w-3 border-2 border-[#6750A4] border-t-transparent"></span>
+                            <div className="inline-flex items-center gap-2 text-xs font-bold text-[var(--color-primary)]">
+                              <span className="animate-spin rounded-sm h-3 w-3 border-2 border-[var(--color-primary)] border-t-transparent"></span>
                               Grading with Gemini...
                             </div>
                             <p className="text-[10px] text-gray-500 italic">{autogradingMessage}</p>
@@ -1893,10 +2196,10 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           <button
                             onClick={handleAiAutograde}
                             disabled={gradingQueue.filter(q => !q.grade).length === 0}
-                            className={`px-5 py-3 rounded-xl text-xs font-black inline-flex items-center justify-center gap-2 shadow-xs transition-all ${
+                            className={`px-5 py-3 rounded-sm text-xs font-black inline-flex items-center justify-center gap-2 shadow-xs transition-all ${
                               gradingQueue.filter(q => !q.grade).length === 0
-                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
-                                : 'bg-[#6750A4] hover:bg-[#533C8A] text-white'
+                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-[var(--color-outline-variant)]'
+                                : 'bg-[var(--color-primary)] hover:bg-[#533C8A] text-white'
                             }`}
                           >
                             <Bot size={15} /> Autograde with AI
@@ -1910,17 +2213,82 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                       </div>
                     </div>
                   </div>
+
+                  {/* Pending Essay Workflow Queue Feed */}
+                  {gradingQueue.filter(q => !q.grade).length > 0 && (
+                    <div className="space-y-3 p-6 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm shadow-xs">
+                      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                        <div>
+                          <span className="text-xs font-black text-[var(--color-primary)] uppercase tracking-wider block font-sans">
+                            Pending AI Essay Workflow Feed
+                          </span>
+                          <span className="text-[11px] text-gray-400 block mt-0.5">
+                            Displays a list of student submissions waiting for AI grading, along with their individually computed Gemini API token costs.
+                          </span>
+                        </div>
+                        <span className={`self-start sm:self-auto text-[10px] font-mono font-bold px-2.5 py-1 rounded-sm border border-solid uppercase ${
+                          hasEnoughBudget 
+                            ? 'text-[#21005D] bg-[#EADDFF] border-[#D0BCFF]' 
+                            : 'text-amber-800 bg-amber-50 border-amber-100'
+                        }`}>
+                          Queue Total Burden: {outstandingDemandSum.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto border border-[var(--color-outline-variant)] rounded-sm">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-[var(--color-surface-dim)] text-[var(--color-on-surface-variant)] border-b border-[var(--color-outline-variant)] font-bold uppercase tracking-wider">
+                              <th className="p-3">Student</th>
+                              <th className="p-3">Exam / Prompt</th>
+                              <th className="p-3">Syllable Word Counts</th>
+                              <th className="p-3 text-right">Estimated Footprint</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-solid divide-[var(--color-outline-variant)] font-medium">
+                            {gradingQueue.filter(q => !q.grade).map((item, idx) => {
+                              const promptWords = (item.prompt || '').trim().split(/\s+/).filter(Boolean).length;
+                              const rubricWords = (item.rubric_guide || '').trim().split(/\s+/).filter(Boolean).length;
+                              const responseWords = (item.student_response || '').trim().split(/\s+/).filter(Boolean).length;
+                              const estimatedTokens = estimateFrqTokens(item);
+                              
+                              return (
+                                <tr key={`${item.session_id}-${item.q_id}-${idx}`} className="hover:bg-[var(--color-surface-dim)] transition-colors">
+                                  <td className="p-3">
+                                    <span className="font-bold text-[var(--color-on-surface)] block">{item.student_name}</span>
+                                    <span className="text-[10px] text-gray-400 font-mono block uppercase">{item.student_id}</span>
+                                  </td>
+                                  <td className="p-3">
+                                    <span className="font-semibold block truncate max-w-xs">{item.event_name}</span>
+                                    <p className="text-[10px] text-gray-400 block truncate max-w-sm italic">"{item.prompt}"</p>
+                                  </td>
+                                  <td className="p-3">
+                                    <div className="font-sans text-[10px] text-gray-500 shrink-0">
+                                      Prompt: <strong className="text-gray-700">{promptWords}w</strong> <span className="text-zinc-300">|</span> Rubric: <strong className="text-gray-700">{rubricWords}w</strong> <span className="text-zinc-300">|</span> Essay: <strong className="text-gray-700">{responseWords}w</strong>
+                                    </div>
+                                    <div className="text-[10px] block truncate text-zinc-400 max-w-xs mt-0.5">"{item.student_response || <em className="italic">Blank response/No answer typed.</em>}"</div>
+                                  </td>
+                                  <td className="p-3 text-right font-mono text-xs font-black text-amber-700">
+                                    ~{estimatedTokens.toLocaleString()} <span className="text-[10px] font-bold text-gray-400 font-sans">tokens</span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-6 mt-6">
 
                   {/* MCQ overall compiled totals table */}
-                  <div className="space-y-3 pt-4 border-t border-gray-100">
-                    <span className="text-xs font-black text-[#6750A4] uppercase tracking-wider block">Graded Scores Log Ledger ({gradingResults.length} Completed)</span>
-                    <div className="overflow-x-auto border border-[#CAC4D0] rounded-2xl">
+                  <div className="space-y-3 pt-4 border-t border-[var(--color-outline-variant)]">
+                    <span className="text-xs font-black text-[var(--color-primary)] uppercase tracking-wider block">Graded Scores Log Ledger ({gradingResults.length} Completed)</span>
+                    <div className="overflow-x-auto border border-[var(--color-outline-variant)] rounded-sm">
                       <table className="w-full text-left text-xs font-medium">
                         <thead>
-                          <tr className="bg-[#FAF9FD] text-[#49454F] border-b border-gray-200 font-bold uppercase tracking-wider">
+                          <tr className="bg-[var(--color-surface-dim)] text-[var(--color-on-surface-variant)] border-b border-[var(--color-outline-variant)] font-bold uppercase tracking-wider">
                             <th className="p-4">Student ID/Name</th>
                             <th className="p-4">Assigned Test blueprint</th>
                             <th className="p-4 text-center">MCQ Corrects</th>
@@ -1930,18 +2298,27 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                             <th className="p-4 text-right">Registered Time</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-[#F4F4F4]">
+                        <tbody className="divide-y divide-dashed divide-[var(--color-outline-variant)]">
                           {gradingResults.length === 0 ? (
                             <tr>
                               <td colSpan={7} className="text-center p-6 text-gray-400">No completed scores ledger registered on the server cache yet.</td>
                             </tr>
                           ) : (
-                            gradingResults.map((item, idx) => (
-                              <tr key={`${item.session_id}-${idx}`} className="hover:bg-neutral-50 transition-colors">
-                                <td className="p-4">
-                                  <span className="font-mono font-bold text-[#6750A4] block uppercase">{item.student_id}</span>
-                                  <span className="font-bold text-sm text-[#1D1B20]">{item.student_name}</span>
-                                </td>
+                            gradingResults.map((item, idx) => {
+                              const hasResultInfractions = (item.infraction_count || 0) > 0;
+                              return (
+                                <tr key={`${item.session_id}-${idx}`} className={`transition-colors ${hasResultInfractions ? 'bg-red-500/[0.02] border-l-2 border-red-500 border-solid' : 'hover:bg-[var(--color-surface-container)]'}`}>
+                                  <td className="p-4">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span className="font-mono font-bold text-[var(--color-primary)] block uppercase tracking-tight bg-[var(--color-surface-dim)] px-1.5 py-0.5 rounded select-all text-[10px]">{item.student_id}</span>
+                                      {hasResultInfractions && (
+                                        <span className="bg-red-100 text-red-700 border border-solid border-red-200 text-[9px] font-black tracking-wide uppercase px-1.5 py-0.5 rounded-sm flex items-center gap-1 shrink-0" title="Proctoring logs detected tab swaps or blur deviations">
+                                          <AlertCircle size={9} /> {item.infraction_count} Focus Loss(es)
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="font-bold text-sm text-[var(--color-on-surface)] mt-1 block">{item.student_name}</span>
+                                  </td>
                                 <td className="p-4">
                                   <span className="font-bold">{item.event_name}</span>
                                   <p className="font-mono text-[10px] text-gray-400">{item.test_id}</p>
@@ -1949,7 +2326,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                 <td className="p-4 text-center font-mono font-bold">{item.mc_score} / {item.mc_total} pts</td>
                                 <td className="p-4 text-center font-semibold text-gray-600 font-mono">{item.frq_score} / {item.frq_total} pts</td>
                                 <td className="p-4 text-center">
-                                  <span className="bg-green-100 text-green-800 text-xs font-extrabold px-3 py-1 rounded-full font-mono">
+                                  <span className="bg-green-100 text-green-800 text-xs font-extrabold px-3 py-1 rounded-sm font-mono">
                                     {item.total_score} / {item.total_possible} pts ({Math.round((item.total_score / item.total_possible) * 100)}%)
                                   </span>
                                 </td>
@@ -1957,7 +2334,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                   <div className="flex justify-center items-center gap-1.5 font-sans">
                                     <button
                                       onClick={() => handleViewStudentResponses(item.session_id)}
-                                      className="px-2.5 py-1.5 bg-[#EADDFF] border border-[#D0BCFF] hover:bg-[#D0BCFF] text-[#21005D] text-[10px] font-black uppercase rounded-lg transition-colors inline-flex items-center gap-1 shadow-2xs"
+                                      className="px-2.5 py-1.5 bg-[var(--color-surface-bright)] border border-[var(--color-outline-variant)] hover:bg-[#D0BCFF] text-[#21005D] text-[10px] font-black uppercase rounded-sm transition-colors inline-flex items-center gap-1 shadow-2xs"
                                       title="Examine all MCQ and Free Response answers of this session"
                                     >
                                       <Eye size={12} /> View Details
@@ -1965,7 +2342,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                     <button
                                       onClick={() => handleMailSingleGrade(item.test_id, item.student_id)}
                                       disabled={isSendingEmail[`${item.test_id}-${item.student_id}`]}
-                                      className={`px-2.5 py-1.5 font-bold uppercase rounded-lg text-[10px] border transition-all inline-flex items-center gap-1 shadow-2xs ${
+                                      className={`px-2.5 py-1.5 font-bold uppercase rounded-sm text-[10px] border transition-all inline-flex items-center gap-1 shadow-2xs ${
                                         isSendingEmail[`${item.test_id}-${item.student_id}`]
                                           ? 'bg-zinc-100 border-zinc-200 text-zinc-400 cursor-not-allowed'
                                           : 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100'
@@ -1975,11 +2352,19 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                       <Mail size={12} className={isSendingEmail[`${item.test_id}-${item.student_id}`] ? "animate-pulse" : ""} />
                                       {isSendingEmail[`${item.test_id}-${item.student_id}`] ? "Mailing..." : "Email Grade"}
                                     </button>
+                                    <button
+                                      onClick={() => triggerResetSession(item.session_id, item.test_id, item.student_id)}
+                                      className="px-2.5 py-1.5 bg-red-50 border border-red-200 hover:bg-red-100 text-red-700 text-[10px] font-black uppercase rounded-sm transition-colors inline-flex items-center gap-1 shadow-2xs cursor-pointer"
+                                      title="Delete this test entry completely to allow the student to retake it"
+                                    >
+                                      <Trash2 size={12} /> Delete & Reset
+                                    </button>
                                   </div>
                                 </td>
                                 <td className="p-4 text-right text-gray-500 font-mono">{new Date(item.submitted_at).toLocaleString()}</td>
                               </tr>
-                            ))
+                              );
+                            })
                           )}
                         </tbody>
                       </table>
@@ -1995,35 +2380,35 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             <div className="space-y-6 pb-12">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Box 1: Change Passphrase */}
-              <div className="bg-white border border-[#CAC4D0] rounded-3xl p-6 shadow-xs flex flex-col justify-between space-y-4">
+              <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 shadow-xs flex flex-col justify-between space-y-4">
                 <div className="space-y-4">
-                  <h3 className="font-black text-base text-[#1D1B20] flex items-center gap-1.5 border-b border-[#F4F4F4] pb-2">
-                    <Key size={18} className="text-[#6750A4]" /> Change Admin Password
+                  <h3 className="font-black text-base text-[var(--color-on-surface)] flex items-center gap-1.5 border-b border-solid border-[var(--color-outline-variant)] pb-2">
+                    <Key size={18} className="text-[var(--color-primary)]" /> Change Admin Password
                   </h3>
-                  <p className="text-xs text-[#49454F] leading-relaxed">
+                  <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
                     Set a secure, offline password to access the supervisor administrator panel. If you need to force reset, simply delete `data/config.json` inside tests/host directory and launch page to restart setup wizard.
                   </p>
 
                   <div className="space-y-3 pt-2">
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Current Password passphrase</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Current Password passphrase</label>
                       <input 
                         type="password"
                         placeholder="••••••••"
                         value={passwordChange.currentPassword}
                         onChange={(e) => setPasswordChange({ ...passwordChange, currentPassword: e.target.value })}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-2.5 py-2"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">New password passphrase</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">New password passphrase</label>
                       <input 
                         type="password"
                         placeholder="••••••••"
                         value={passwordChange.newPassword}
                         onChange={(e) => setPasswordChange({ ...passwordChange, newPassword: e.target.value })}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-2.5 py-2"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2"
                       />
                     </div>
                   </div>
@@ -2031,38 +2416,38 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                 <button 
                   onClick={handleChangePassword}
-                  className="w-full py-2.5 bg-[#6750A4] hover:bg-[#533C8A] text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
+                  className="w-full py-2.5 bg-[var(--color-primary)] hover:bg-[#533C8A] text-white text-xs font-bold rounded-sm shadow-xs transition-colors"
                 >
                   Write New Admin Password
                 </button>
               </div>
 
               {/* Box 2: backups snapshot zip */}
-              <div className="bg-white border border-[#CAC4D0] rounded-3xl p-6 shadow-xs flex flex-col justify-between space-y-4">
+              <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 shadow-xs flex flex-col justify-between space-y-4">
                 <div className="space-y-4">
-                  <h3 className="font-black text-base text-[#1D1B20] flex items-center gap-1.5 border-b border-[#F4F4F4] pb-2">
-                    <Database size={18} className="text-[#6750A4]" /> Backup snapshot database
+                  <h3 className="font-black text-base text-[var(--color-on-surface)] flex items-center gap-1.5 border-b border-solid border-[var(--color-outline-variant)] pb-2">
+                    <Database size={18} className="text-[var(--color-primary)]" /> Backup snapshot database
                   </h3>
-                  <p className="text-xs text-[#49454F] leading-relaxed">
+                  <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
                     Download a secure, complete `.zip` snapshot containing all your blueprints (tests/*.json) and roster metrics. Safe for portability, backup, and migrating computers!
                   </p>
 
                   <button 
                     onClick={handleDownloadBackup}
-                    className="w-full py-3.5 bg-[#EADDFF] hover:bg-[#D0BCFF] text-[#21005D] text-xs font-extrabold rounded-xl flex items-center justify-center gap-1.5 transition-colors border border-[#CAC4D0]"
+                    className="w-full py-3.5 bg-[var(--color-surface-bright)] hover:bg-[#D0BCFF] text-[#21005D] text-xs font-extrabold rounded-sm flex items-center justify-center gap-1.5 transition-colors border border-[var(--color-outline-variant)]"
                   >
                     <Download size={16} /> Download full snapshot backup ZIP
                   </button>
 
-                  <p className="text-xs text-[#49454F] border-t border-[#F4F4F4] pt-4 leading-relaxed">
+                  <p className="text-xs text-[var(--color-on-surface-variant)] border-t border-solid border-[var(--color-outline-variant)] pt-4 leading-relaxed">
                     To restore previous backups onto this server host, select a previous snapshot backup zip file below:
                   </p>
 
-                  <label className="flex items-center gap-3 w-full border border-dashed border-[#CAC4D0] hover:border-[#6750A4] hover:bg-[#6750A4]/3 px-4 py-3 rounded-2xl cursor-pointer transition-all text-sm font-bold">
-                    <Upload size={18} className="text-[#6750A4]" />
+                  <label className="flex items-center gap-3 w-full border border-solid border-[var(--color-outline-variant)] hover:border-[var(--color-primary)] hover:bg-[var(--color-primary)]/3 px-4 py-3 rounded-sm cursor-pointer transition-all text-sm font-bold">
+                    <Upload size={18} className="text-[var(--color-primary)]" />
                     <div className="text-left font-sans">
-                      <p className="font-bold text-xs text-[#1D1B20]">Upload snapshot backup ZIP</p>
-                      <p className="text-[10px] text-[#49454F] font-normal">Replaces all data instantly</p>
+                      <p className="font-bold text-xs text-[var(--color-on-surface)]">Upload snapshot backup ZIP</p>
+                      <p className="text-[10px] text-[var(--color-on-surface-variant)] font-normal">Replaces all data instantly</p>
                     </div>
                     <input 
                       type="file" 
@@ -2076,30 +2461,30 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             </div>
 
             {/* Box 3: AI Auto-Grading Secrets & API Key Configuration */}
-            <div className="mt-6 bg-white border border-[#CAC4D0] rounded-3xl p-6 shadow-xs space-y-4">
-              <h3 className="font-black text-base text-[#1D1B20] flex items-center gap-1.5 border-b border-[#F4F4F4] pb-2">
-                <Bot size={18} className="text-[#6750A4]" /> AI Auto-Grading Secrets & Key Configuration
+            <div className="mt-6 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 shadow-xs space-y-4">
+              <h3 className="font-black text-base text-[var(--color-on-surface)] flex items-center gap-1.5 border-b border-solid border-[var(--color-outline-variant)] pb-2">
+                <Bot size={18} className="text-[var(--color-primary)]" /> AI Auto-Grading Secrets & Key Configuration
               </h3>
               
-              <p className="text-xs text-[#49454F] leading-relaxed">
+              <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
                 Provide a valid <strong>Google Gemini API Key</strong> to enable professional, automatic, instant grading assessments on student Free Response questions (FRQs) using AI models. This secret key is safely stored server-side and never exposed to client browsers.
               </p>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-2">
                 {/* Status card */}
-                <div className="lg:col-span-1 border border-[#CAC4D0] bg-[#FAF9FD] rounded-2xl p-4 flex flex-col justify-between">
+                <div className="lg:col-span-1 border border-[var(--color-outline-variant)] bg-[var(--color-surface-dim)] rounded-sm p-4 flex flex-col justify-between">
                   <div>
                     <span className="text-[10px] uppercase font-bold text-gray-500 block mb-1">Grading Key Status</span>
                     {secretsStatus?.is_configured ? (
                       <div className="space-y-1.5">
-                        <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black px-2.5 py-1 rounded-full uppercase">
+                        <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black px-2.5 py-1 rounded-sm uppercase">
                           <Check size={12} /> Active & Configured
                         </span>
                         <p className="font-mono text-xs text-gray-600 block mt-1">Key: <code>{secretsStatus.masked_key}</code></p>
                       </div>
                     ) : (
                       <div className="space-y-1.5">
-                        <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-800 border border-rose-200 text-xs font-black px-2.5 py-1 rounded-full uppercase">
+                        <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-800 border border-rose-200 text-xs font-black px-2.5 py-1 rounded-sm uppercase">
                           <AlertCircle size={12} /> Not Configured
                         </span>
                         <p className="text-[10px] text-gray-400 block">AI Autograding features are currently locked. Provide a key on the right to unlock.</p>
@@ -2109,7 +2494,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                   
                   <button 
                     onClick={fetchSecretsStatus}
-                    className="mt-4 px-3 py-1.5 bg-white border border-[#CAC4D0] hover:bg-gray-50 text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors text-gray-700"
+                    className="mt-4 px-3 py-1.5 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] hover:bg-gray-50 text-[11px] font-bold rounded-sm flex items-center justify-center gap-1.5 transition-colors text-gray-700"
                   >
                     <RefreshCw size={11} /> Refresh status
                   </button>
@@ -2118,14 +2503,14 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 {/* Form key setter */}
                 <div className="lg:col-span-2 space-y-4">
                   <div>
-                    <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Set Gemini api key (GEMINI_API_KEY)</label>
+                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Set Gemini api key (GEMINI_API_KEY)</label>
                     <div className="relative">
                       <input 
                         type="password"
                         placeholder="Paste your AI Studio GEMINI_API_KEY here..."
                         value={newGeminiKey}
                         onChange={(e) => setNewGeminiKey(e.target.value)}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg pl-3 pr-10 py-2.5 font-mono"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm pl-3 pr-10 py-2.5 font-mono"
                       />
                       <Bot size={16} className="absolute right-3 top-3 text-neutral-400 select-none" />
                     </div>
@@ -2134,7 +2519,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                   <button 
                     onClick={handleSaveSecrets}
-                    className="py-2.5 px-6 bg-[#6750A4] hover:bg-[#533C8A] text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
+                    className="py-2.5 px-6 bg-[var(--color-primary)] hover:bg-[#533C8A] text-white text-xs font-bold rounded-sm shadow-xs transition-colors"
                   >
                     Save & Load API Key Secret
                   </button>
@@ -2143,24 +2528,24 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             </div>
 
             {/* Box 4: Student Grade Delivery (SMTP Configuration) */}
-            <div className="mt-6 bg-white border border-[#CAC4D0] rounded-3xl p-6 shadow-xs space-y-4">
-              <h3 className="font-black text-base text-[#1D1B20] flex items-center gap-1.5 border-b border-[#F4F4F4] pb-2">
-                <Mail size={18} className="text-[#6750A4]" /> Student Grade Email Gateway (SMTP)
+            <div className="mt-6 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 shadow-xs space-y-4">
+              <h3 className="font-black text-base text-[var(--color-on-surface)] flex items-center gap-1.5 border-b border-solid border-[var(--color-outline-variant)] pb-2">
+                <Mail size={18} className="text-[var(--color-primary)]" /> Student Grade Email Gateway (SMTP)
               </h3>
               
-              <p className="text-xs text-[#49454F] leading-relaxed">
+              <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
                 Connect your organization's SMTP relay servers to automatically dispatch graded scorecard diagnostic reports safely to students' configured roster emails. 
                 <strong> Keep SMTP headers empty to run in Safe Simulation Mode</strong>, where graded emails are written locally into the test simulator outbox for inspection.
               </p>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-2">
                 {/* Configuration status indicator */}
-                <div className="lg:col-span-1 border border-[#CAC4D0] bg-[#FAF9FD] rounded-2xl p-4 flex flex-col justify-between">
+                <div className="lg:col-span-1 border border-[var(--color-outline-variant)] bg-[var(--color-surface-dim)] rounded-sm p-4 flex flex-col justify-between">
                   <div>
                     <span className="text-[10px] uppercase font-bold text-gray-500 block mb-1">Gateway Status</span>
                     {smtpConfig.smtp_host && smtpConfig.smtp_user ? (
                       <div className="space-y-1.5">
-                        <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black px-2.5 py-1 rounded-full uppercase">
+                        <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black px-2.5 py-1 rounded-sm uppercase">
                           <Check size={12} /> SMTP Server Enabled
                         </span>
                         <p className="text-[11px] font-mono text-gray-600 block mt-1">Host: <code>{smtpConfig.smtp_host}</code></p>
@@ -2168,7 +2553,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                       </div>
                     ) : (
                       <div className="space-y-1.5">
-                        <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200 text-xs font-black px-2.5 py-1 rounded-full uppercase">
+                        <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200 text-xs font-black px-2.5 py-1 rounded-sm uppercase">
                           <RefreshCw size={12} className="animate-spin" /> Safe Simulator Active
                         </span>
                         <p className="text-[10px] text-gray-500 mt-1">SMTP is unconfigured. All graded emails will be logged locally in the simulation outbox panel below.</p>
@@ -2178,7 +2563,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                   <button 
                     onClick={fetchSmtpConfig}
-                    className="mt-4 px-3 py-1.5 bg-white border border-[#CAC4D0] hover:bg-gray-50 text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors text-gray-700 w-full"
+                    className="mt-4 px-3 py-1.5 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] hover:bg-gray-50 text-[11px] font-bold rounded-sm flex items-center justify-center gap-1.5 transition-colors text-gray-700 w-full"
                   >
                     <RefreshCw size={11} /> Refresh SMTP Status
                   </button>
@@ -2187,27 +2572,27 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 {/* Configurations input layout */}
                 <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4 font-sans">
                   <div>
-                    <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">SMTP Server Hostname</label>
+                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">SMTP Server Hostname</label>
                     <input 
                       type="text"
                       placeholder="e.g. smtp.gmail.com"
                       value={smtpConfig.smtp_host}
                       onChange={(e) => setSmtpConfig({ ...smtpConfig, smtp_host: e.target.value })}
-                      className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-3 py-2 font-mono"
+                      className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-3 py-2 font-mono"
                     />
                   </div>
 
                   <div>
                     <div className="flex justify-between items-center mb-1">
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase">Port Number</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase">Port Number</label>
                       <label className="inline-flex items-center gap-1 cursor-pointer">
                         <input 
                           type="checkbox"
                           checked={smtpConfig.smtp_secure}
                           onChange={(e) => setSmtpConfig({ ...smtpConfig, smtp_secure: e.target.checked })}
-                          className="rounded text-[#6750A4] focus:ring-[#6750A4]"
+                          className="rounded text-[var(--color-primary)] focus:ring-[#6750A4]"
                         />
-                        <span className="text-[9px] font-bold text-[#49454F] uppercase">Use SSL/TLS</span>
+                        <span className="text-[9px] font-bold text-[var(--color-on-surface-variant)] uppercase">Use SSL/TLS</span>
                       </label>
                     </div>
                     <input 
@@ -2215,47 +2600,47 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                       placeholder="e.g. 465 or 587"
                       value={smtpConfig.smtp_port}
                       onChange={(e) => setSmtpConfig({ ...smtpConfig, smtp_port: e.target.value })}
-                      className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-3 py-2 font-mono"
+                      className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-3 py-2 font-mono"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">SMTP Username / auth email</label>
+                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">SMTP Username / auth email</label>
                     <input 
                       type="text"
                       placeholder="e.g. grading@olympiad.org"
                       value={smtpConfig.smtp_user}
                       onChange={(e) => setSmtpConfig({ ...smtpConfig, smtp_user: e.target.value })}
-                      className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-3 py-2 font-mono"
+                      className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-3 py-2 font-mono"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">SMTP Password</label>
+                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">SMTP Password</label>
                     <input 
                       type="password"
                       placeholder={smtpConfig.has_password ? "•••••••• (Password Saved)" : "Credentials password passphrase..."}
                       value={smtpConfig.smtp_password === '__UNCHANGED__' ? '' : smtpConfig.smtp_password}
                       onChange={(e) => setSmtpConfig({ ...smtpConfig, smtp_password: e.target.value })}
-                      className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-3 py-2 font-mono"
+                      className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-3 py-2 font-mono"
                     />
                   </div>
 
                   <div className="sm:col-span-2">
-                    <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Sender 'From' Address Header String</label>
+                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Sender 'From' Address Header String</label>
                     <input 
                       type="text"
                       placeholder="e.g. Science Olympiad Tryouts <grading@olympiad.org>"
                       value={smtpConfig.smtp_from}
                       onChange={(e) => setSmtpConfig({ ...smtpConfig, smtp_from: e.target.value })}
-                      className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-3 py-2"
+                      className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-3 py-2"
                     />
                   </div>
 
                   <div className="sm:col-span-2 pt-2">
                     <button 
                       onClick={handleSaveSmtpConfig}
-                      className="py-2.5 px-6 bg-[#6750A4] hover:bg-[#533C8A] text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
+                      className="py-2.5 px-6 bg-[var(--color-primary)] hover:bg-[#533C8A] text-white text-xs font-bold rounded-sm shadow-xs transition-colors"
                     >
                       Save SMTP Gateway Settings
                     </button>
@@ -2265,22 +2650,22 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             </div>
 
             {/* Simulated outbound outbox visualizer list */}
-            <div className="mt-6 bg-white border border-[#CAC4D0] rounded-3xl p-6 shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-[#F4F4F4] pb-2 gap-2">
-                <h3 className="font-black text-base text-[#1D1B20] flex items-center gap-1.5">
-                  <Mail className="text-[#6750A4]" size={18} /> Simulated Email Sandbox Logs & Outbox ({outboundEmails.length})
+            <div className="mt-6 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-solid border-[var(--color-outline-variant)] pb-2 gap-2">
+                <h3 className="font-black text-base text-[var(--color-on-surface)] flex items-center gap-1.5">
+                  <Mail className="text-[var(--color-primary)]" size={18} /> Simulated Email Sandbox Logs & Outbox ({outboundEmails.length})
                 </h3>
                 <div className="flex gap-2">
                   <button 
                     onClick={fetchOutboundEmails}
-                    className="px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-[#1D1B20] text-[11px] font-bold rounded-lg flex items-center gap-1 transition-colors"
+                    className="px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-[var(--color-on-surface)] text-[11px] font-bold rounded-sm flex items-center gap-1 transition-colors"
                   >
                     <RefreshCw size={12} /> Sync Outbox
                   </button>
                   {outboundEmails.length > 0 && (
                     <button 
                       onClick={handleClearOutboundEmails}
-                      className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-bold rounded-lg flex items-center gap-1 border border-rose-200 transition-colors"
+                      className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-bold rounded-sm flex items-center gap-1 border border-rose-200 transition-colors"
                     >
                       <Trash size={12} /> Clear Logs
                     </button>
@@ -2288,20 +2673,20 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 </div>
               </div>
 
-              <p className="text-xs text-[#49454F] leading-relaxed">
+              <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
                 When you dispatch student scorecards in <strong>Simulation mode</strong>, compiled grade report mock email contents are written below. Click any log record below to review exactly what students would receive!
               </p>
 
               {outboundEmails.length === 0 ? (
-                <div className="border border-dashed border-[#CAC4D0] rounded-2xl p-10 text-center text-xs text-gray-400">
+                <div className="border border-solid border-[var(--color-outline-variant)] rounded-sm p-10 text-center text-xs text-gray-400">
                   No simulated emails have been dispatched yet. Score student tests and submit grading dispatches to review mock receipts here!
                 </div>
               ) : (
-                <div className="border border-[#CAC4D0] rounded-2xl overflow-hidden bg-[#FAF9FD]">
+                <div className="border border-[var(--color-outline-variant)] rounded-sm overflow-hidden bg-[var(--color-surface-dim)]">
                   <div className="overflow-x-auto max-h-[350px]">
                     <table className="w-full align-middle text-left border-collapse">
                       <thead>
-                        <tr className="bg-[#EADDFF]/40 border-b border-[#CAC4D0] text-[10px] font-bold text-[#49454F] uppercase tracking-wider">
+                        <tr className="bg-[var(--color-surface-bright)]/40 border-b border-[var(--color-outline-variant)] text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider">
                           <th className="p-3">Timestamp</th>
                           <th className="p-3">Student Recipient</th>
                           <th className="p-3">Test & Event Name</th>
@@ -2309,9 +2694,9 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           <th className="p-3 text-right">Diagnostic Preview</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-[#CAC4D0]/60 text-xs">
+                      <tbody className="divide-y divide-[var(--color-outline-variant)] text-xs">
                         {outboundEmails.map((email) => (
-                          <tr key={email.id} className="hover:bg-neutral-50 transition-colors">
+                          <tr key={email.id} className="hover:bg-[var(--color-surface-container)] transition-colors">
                             <td className="p-3 font-mono text-[10px] text-gray-500 whitespace-nowrap">
                               {new Date(email.timestamp).toLocaleString()}
                             </td>
@@ -2319,12 +2704,12 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                               <span className="font-bold block text-gray-800">{email.student_name} ({email.student_id})</span>
                               <span className="font-mono text-[10px] text-gray-500">{email.to_email}</span>
                             </td>
-                            <td className="p-3 font-bold text-[#49454F]">
+                            <td className="p-3 font-bold text-[var(--color-on-surface-variant)]">
                               {email.test_name} 
                               <span className="text-[10px] font-mono block text-gray-400 normal-case font-normal">Blueprint: {email.test_id}</span>
                             </td>
                             <td className="p-3 text-xs whitespace-nowrap">
-                              <span className="font-extrabold text-[#6750A4] text-sm bg-[#EADDFF] border border-[#D0BCFF] px-2 py-0.5 rounded mr-1">
+                              <span className="font-extrabold text-[var(--color-primary)] text-sm bg-[var(--color-surface-bright)] border border-[var(--color-outline-variant)] px-2 py-0.5 rounded mr-1">
                                 {email.score}
                               </span>
                               <span className="text-[10px] font-semibold text-emerald-600 uppercase bg-emerald-50 px-1 py-0.5 rounded border border-emerald-100">
@@ -2343,7 +2728,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                     alert("Pop-up blocked. Please permit pop-ups to view raw mock visual templates!");
                                   }
                                 }}
-                                className="px-2.5 py-1 text-[11px] font-bold bg-[#6750A4] text-white rounded-md uppercase hover:bg-[#533C8A] transition-colors"
+                                className="px-2.5 py-1 text-[11px] font-bold bg-[var(--color-primary)] text-[var(--color-on-primary)] rounded-sm uppercase hover:bg-[#533C8A] transition-colors"
                               >
                                 View template
                               </button>
@@ -2358,42 +2743,42 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             </div>
 
             {/* Box 5: High-Concurrency Load & Stress Simulation Testing */}
-            <div className="mt-6 bg-white border border-[#CAC4D0] rounded-3xl p-6 shadow-xs space-y-4">
-              <h3 className="font-black text-base text-[#1D1B20] flex items-center gap-1.5 border-b border-[#F4F4F4] pb-2">
-                <Activity size={18} className="text-[#6750A4]" /> High-Concurrency Load & Stress Simulation Testing
+            <div className="mt-6 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 shadow-xs space-y-4">
+              <h3 className="font-black text-base text-[var(--color-on-surface)] flex items-center gap-1.5 border-b border-solid border-[var(--color-outline-variant)] pb-2">
+                <Activity size={18} className="text-[var(--color-primary)]" /> High-Concurrency Load & Stress Simulation Testing
               </h3>
 
-              <p className="text-xs text-[#49454F] leading-relaxed">
+              <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
                 Verify LANtern's robust system capability by simulating intense multi-student peak exam conditions. 
                 This fires hundreds of concurrent file read-modify-write saves and submit actions on the host disk utilizing mutual exclusion locks to thoroughly verify transactional safety and throughput.
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2 font-sans">
                 {/* Configuration Input */}
-                <div className="md:col-span-1 space-y-4 border border-[#CAC4D0] bg-[#FAF9FD] rounded-2xl p-4 flex flex-col justify-between">
+                <div className="md:col-span-1 space-y-4 border border-[var(--color-outline-variant)] bg-[var(--color-surface-dim)] rounded-sm p-4 flex flex-col justify-between">
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Simulated Students</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Simulated Students</label>
                       <input 
                         type="number"
                         min="1"
                         max="500"
                         value={stressStudentsCount}
                         onChange={(e) => setStressStudentsCount(Math.min(500, Math.max(1, Number(e.target.value) || 200)))}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-3 py-2 font-mono"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-3 py-2 font-mono"
                       />
                       <span className="text-[10px] text-gray-500 mt-0.5 block">Total dummy students submitting concurrently</span>
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-[#49454F] uppercase mb-1">Concurrency Wave Limit</label>
+                      <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Concurrency Wave Limit</label>
                       <input 
                         type="number"
                         min="1"
                         max="50"
                         value={stressConcurrencyLimit}
                         onChange={(e) => setStressConcurrencyLimit(Math.min(50, Math.max(1, Number(e.target.value) || 20)))}
-                        className="w-full text-xs border border-[#CAC4D0] bg-white rounded-lg px-3 py-2 font-mono"
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-3 py-2 font-mono"
                       />
                       <span className="text-[10px] text-gray-500 mt-0.5 block">Simultaneous execution batch wave limit (max 50)</span>
                     </div>
@@ -2402,7 +2787,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                   <button 
                     onClick={handleRunSimulationLoadTest}
                     disabled={isSimulatingStress}
-                    className={`w-full py-2.5 px-4 font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors text-xs text-white ${
+                    className={`w-full py-2.5 px-4 font-bold rounded-sm flex items-center justify-center gap-1.5 transition-colors text-xs text-white ${
                       isSimulatingStress 
                         ? 'bg-zinc-400 cursor-not-allowed animate-pulse' 
                         : 'bg-indigo-600 hover:bg-indigo-700 shadow-xs'
@@ -2413,7 +2798,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 </div>
 
                 {/* Simulation Report Result Output */}
-                <div className="md:col-span-2 border border-[#CAC4D0] rounded-2xl p-4 flex flex-col justify-between min-h-[220px] bg-[#FAF9FD]">
+                <div className="md:col-span-2 border border-[var(--color-outline-variant)] rounded-sm p-4 flex flex-col justify-between min-h-[220px] bg-[var(--color-surface-dim)]">
                   {isSimulatingStress ? (
                     <div className="flex-1 flex flex-col items-center justify-center space-y-3 p-6 text-center">
                       <RefreshCw className="animate-spin text-indigo-600" size={32} />
@@ -2425,55 +2810,60 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                   ) : stressReport ? (
                     <div className="space-y-4 flex-1 flex flex-col justify-between">
                       <div>
-                        <div className="flex items-center justify-between border-b border-[#F4F4F4] pb-2 mb-3">
+                        <div className="flex items-center justify-between border-b border-solid border-[var(--color-outline-variant)] pb-2 mb-3">
                           <span className="text-xs font-black uppercase text-gray-600 block">Performance Analysis Report</span>
-                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-black px-2.5 py-1 rounded-full uppercase">
+                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-black px-2.5 py-1 rounded-sm uppercase">
                             <Check size={10} /> Safety Intact (No Collisions)
                           </span>
                         </div>
 
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                          <div className="bg-white border border-[#EADDFF] p-2.5 rounded-xl text-center">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-2.5 rounded-sm text-center">
                             <span className="text-[9px] uppercase font-bold text-gray-400 block mb-0.5">Total Duration</span>
-                            <span className="text-sm font-black text-[#1D1B20] font-mono">{(stressReport.total_duration_ms / 1000).toFixed(2)}s</span>
+                            <span className="text-sm font-black text-[var(--color-on-surface)] font-mono">{(stressReport.total_duration_ms / 1000).toFixed(2)}s</span>
                           </div>
 
-                          <div className="bg-white border border-[#EADDFF] p-2.5 rounded-xl text-center">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-2.5 rounded-sm text-center">
                             <span className="text-[9px] uppercase font-bold text-gray-400 block mb-0.5">Batch Lock Limit</span>
-                            <span className="text-sm font-black text-[#1D1B20] font-mono">{stressReport.concurrency_limit} Threads</span>
+                            <span className="text-sm font-black text-[var(--color-on-surface)] font-mono">{stressReport.concurrency_limit} Threads</span>
                           </div>
 
-                          <div className="bg-white border border-[#EADDFF] p-2.5 rounded-xl text-center">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-2.5 rounded-sm text-center">
                             <span className="text-[9px] uppercase font-bold text-gray-400 block mb-0.5">Throughput Rate</span>
                             <span className="text-sm font-black text-emerald-600 font-mono">{stressReport.throughput_req_per_sec} ops/s</span>
                           </div>
 
-                          <div className="bg-white border border-[#EADDFF] p-2.5 rounded-xl text-center">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-2.5 rounded-sm text-center">
                             <span className="text-[9px] uppercase font-bold text-gray-400 block mb-0.5">Logins / Sessions</span>
                             <span className="text-sm font-black text-gray-700 font-mono">{stressReport.students_simulated} created</span>
                           </div>
 
-                          <div className="bg-white border border-[#EADDFF] p-2.5 rounded-xl text-center">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-2.5 rounded-sm text-center">
                             <span className="text-[9px] uppercase font-bold text-gray-400 block mb-0.5">Saves Committed</span>
-                            <span className="text-sm font-black text-[#6750A4] font-mono">{stressReport.saves_successful}/{stressReport.students_simulated}</span>
+                            <span className="text-sm font-black text-[var(--color-primary)] font-mono">{stressReport.saves_successful}/{stressReport.students_simulated}</span>
                           </div>
 
-                          <div className="bg-white border border-[#EADDFF] p-2.5 rounded-xl text-center">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-2.5 rounded-sm text-center">
                             <span className="text-[9px] uppercase font-bold text-gray-400 block mb-0.5">Submits & Graded</span>
                             <span className="text-sm font-black text-[#21005D] font-mono">{stressReport.submits_successful}/{stressReport.students_simulated}</span>
+                          </div>
+
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-2.5 rounded-sm text-center pb-2 col-span-2 sm:col-span-3">
+                            <span className="text-[9px] uppercase font-bold text-gray-400 block mb-0.5">Responses Graded/sec (Est 100w/resp)</span>
+                            <span className="text-xs font-black text-indigo-600 font-mono block truncate">{responsesGradedPerSec === 0 ? "N/A" : `${responsesGradedPerSec}/s`}</span>
                           </div>
                         </div>
                       </div>
 
-                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 text-[11px] text-emerald-800 leading-relaxed mt-2">
+                      <div className="bg-emerald-50 border border-emerald-100 rounded-sm p-3 text-[11px] text-emerald-800 leading-relaxed mt-2">
                         <strong>Performance integrity confirmed:</strong> Processed concurrent updates seamlessly on <strong>{stressReport.students_simulated}</strong> asynchronous operations using atomic mutual-exclusion locks. Zero database collisions or file corrupted segments were reported.
                       </div>
                     </div>
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-gray-400">
-                      <Activity size={28} className="text-gray-300 mb-1.5" />
-                      <p className="text-xs font-bold font-sans">No execution data simulated yet.</p>
-                      <p className="text-[10px] text-gray-400 mt-1 max-w-xs">Select your student load size and run the trial simulation to evaluate host hardware response and transactional latency.</p>
+                      <Activity size={28} className="text-zinc-400 mb-1.5" />
+                      <p className="text-xs font-bold font-sans text-gray-600">No active execution data simulated yet.</p>
+                      <p className="text-[10px] text-gray-400 mt-1 max-w-sm mb-4">Select student thread loads and fire concurrent test simulation runs to trace direct host latency.</p>
                     </div>
                   )}
                 </div>
@@ -2487,16 +2877,16 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
       {/* MODAL WORKSTATION: STUDENT runner preview overlay (Read Only) */}
       {previewTestObj && (
         <div className="fixed inset-0 bg-[#1D1B20]/60 flex items-center justify-center z-50 p-6">
-          <div className="bg-white rounded-3xl border border-[#CAC4D0] w-full max-w-4xl h-[90vh] flex flex-col shadow-lg overflow-hidden">
+          <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] w-full max-w-4xl h-[90vh] flex flex-col shadow-lg overflow-hidden">
             {/* Header */}
-            <div className="h-16 border-b border-[#CAC4D0] px-6 bg-[#FEF7FF] flex items-center justify-between">
+            <div className="h-16 border-b border-[var(--color-outline-variant)] px-6 bg-[var(--color-surface)] flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="font-mono text-xs font-bold text-[#6750A4] uppercase bg-[#EADDFF] px-2 py-0.5 rounded">Previewer Mode</span>
+                <span className="font-mono text-xs font-bold text-[var(--color-primary)] uppercase bg-[var(--color-surface-bright)] px-2 py-0.5 rounded">Previewer Mode</span>
                 <span className="font-bold text-sm tracking-tight">{previewTestObj.event_name}</span>
               </div>
               <button 
                 onClick={() => setPreviewTestObj(null)}
-                className="text-xs bg-red-600 text-white font-bold px-4 py-1.5 rounded-full"
+                className="text-xs bg-red-600 text-white font-bold px-4 py-1.5 rounded-sm"
               >
                 Exit Preview
               </button>
@@ -2504,18 +2894,18 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
             {/* Core Body Container */}
             <div className="flex-1 p-6 md:p-8 overflow-y-auto">
-              <div className="border border-[#CAC4D0] rounded-2xl p-6 bg-white space-y-4">
-                <span className="text-xs font-mono font-extrabold text-[#6750A4]">Question {previewTestObj.questions[previewCurQ]?.number || 1} of {previewTestObj.questions.length}</span>
+              <div className="border border-[var(--color-outline-variant)] rounded-sm p-6 bg-[var(--color-surface)] space-y-4">
+                <span className="text-xs font-mono font-extrabold text-[var(--color-primary)]">Question {previewTestObj.questions[previewCurQ]?.number || 1} of {previewTestObj.questions.length}</span>
                 <p className="text-lg font-bold leading-relaxed">
                   <LatexRenderer text={previewTestObj.questions[previewCurQ]?.prompt} />
                 </p>
 
                 {previewTestObj.questions[previewCurQ]?.image_url && (
-                  <div className="my-4 flex justify-center border border-gray-200 rounded-2xl overflow-hidden bg-neutral-50 p-2.5 max-w-full">
+                  <div className="my-4 flex justify-center border border-[var(--color-outline-variant)] rounded-sm overflow-hidden bg-neutral-50 p-2.5 max-w-full">
                     <img 
                       src={getDirectImageUrl(previewTestObj.questions[previewCurQ].image_url)} 
                       alt="Question reference illustration" 
-                      className="max-h-80 w-auto rounded-xl object-contain shadow-sm"
+                      className="max-h-80 w-auto rounded-sm object-contain shadow-sm"
                       referrerPolicy="no-referrer"
                     />
                   </div>
@@ -2527,8 +2917,8 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                     {Object.entries(previewTestObj.questions[previewCurQ].options!).map(([key, raw]) => {
                       const isCorrect = previewTestObj.questions[previewCurQ].correct_mc === key;
                       return (
-                        <div key={key} className={`border rounded-xl p-3 flex items-center gap-3 ${isCorrect ? 'border-green-500 bg-green-50/50' : 'border-gray-200'}`}>
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${isCorrect ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{key}</div>
+                        <div key={key} className={`border rounded-sm p-3 flex items-center gap-3 ${isCorrect ? 'border-green-500 bg-green-50/50' : 'border-[var(--color-outline-variant)]'}`}>
+                          <div className={`w-6 h-6 rounded-sm flex items-center justify-center text-xs font-bold ${isCorrect ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{key}</div>
                           <span className="text-sm font-medium">
                             <LatexRenderer text={raw} />
                           </span>
@@ -2541,7 +2931,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                 {/* FRQ Guide */}
                 {previewTestObj.questions[previewCurQ]?.type === 'FRQ' && (
-                  <div className="mt-4 p-4 bg-amber-50 rounded-xl border border-amber-200">
+                  <div className="mt-4 p-4 bg-amber-50 rounded-sm border border-amber-200">
                     <span className="text-xs font-extrabold text-amber-800 uppercase block">Teacher Guide Rubric Standard:</span>
                     <p className="text-xs text-amber-800 mt-1 whitespace-pre-wrap font-mono">
                       <LatexRenderer text={previewTestObj.questions[previewCurQ].rubric_guide} />
@@ -2552,11 +2942,11 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             </div>
 
             {/* Footer */}
-            <div className="h-16 border-t border-[#CAC4D0] px-6 bg-white flex items-center justify-between">
+            <div className="h-16 border-t border-[var(--color-outline-variant)] px-6 bg-[var(--color-surface)] flex items-center justify-between">
               <button 
                 disabled={previewCurQ === 0}
                 onClick={() => setPreviewCurQ(previewCurQ - 1)}
-                className={`px-4 py-2 border rounded-xl text-xs font-bold ${previewCurQ === 0 ? 'opacity-30 cursor-not-allowed' : 'hover:bg-neutral-50'}`}
+                className={`px-4 py-2 border rounded-sm text-xs font-bold ${previewCurQ === 0 ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[var(--color-surface-container)]'}`}
               >
                 Back
               </button>
@@ -2566,7 +2956,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                   <button 
                     key={q.id}
                     onClick={() => setPreviewCurQ(idx)}
-                    className={`w-8 h-8 rounded-lg text-xs font-bold ${previewCurQ === idx ? 'bg-[#6750A4] text-white' : 'border'}`}
+                    className={`w-8 h-8 rounded-sm text-xs font-bold ${previewCurQ === idx ? 'bg-[var(--color-primary)] text-[var(--color-on-primary)]' : 'border'}`}
                   >
                     {idx + 1}
                   </button>
@@ -2576,7 +2966,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
               <button 
                 disabled={previewCurQ === previewTestObj.questions.length - 1}
                 onClick={() => setPreviewCurQ(previewCurQ + 1)}
-                className={`px-4 py-2 border rounded-xl text-xs font-bold ${previewCurQ === previewTestObj.questions.length - 1 ? 'opacity-30 cursor-not-allowed' : 'hover:bg-neutral-50'}`}
+                className={`px-4 py-2 border rounded-sm text-xs font-bold ${previewCurQ === previewTestObj.questions.length - 1 ? 'opacity-30 cursor-not-allowed' : 'hover:bg-[var(--color-surface-container)]'}`}
               >
                 Next
               </button>
@@ -2587,64 +2977,74 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
       {/* MODAL WORKSTATION: STUDENT responses viewer overlay */}
       {viewingResponseSessionId && (
-        <div className="fixed inset-0 bg-[#1D1B20]/60 flex items-center justify-center z-50 p-6">
-          <div className="bg-white rounded-3xl border border-[#CAC4D0] w-full max-w-4xl h-[90vh] flex flex-col shadow-lg overflow-hidden animate-fadeIn">
+        <div className="fixed inset-0 bg-[#121114]/80 flex items-center justify-center z-50 p-6 backdrop-blur-xs">
+          <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-fadeIn">
             {/* Header */}
-            <div className="h-16 border-b border-[#CAC4D0] px-6 bg-[#FEF7FF] flex items-center justify-between">
+            <div className="h-16 border-b border-[var(--color-outline-variant)] px-6 bg-[var(--color-surface)] flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="font-mono text-xs font-bold text-[#6750A4] uppercase bg-[#EADDFF] px-2.5 py-0.5 rounded">Response Visualizer</span>
-                <span className="font-bold text-sm tracking-tight text-neutral-800">Reviewing Complete Student Submissions Desk</span>
+                <span className="font-mono text-xs font-bold text-[var(--color-primary)] uppercase bg-[var(--color-surface-bright)] px-2.5 py-0.5 rounded">Response Visualizer</span>
+                <span className="font-bold text-sm tracking-tight text-[var(--color-on-surface)]">Reviewing Complete Student Submissions Desk</span>
               </div>
               <button 
                 onClick={() => {
                   setViewingResponseSessionId(null);
                   setViewingResponseData(null);
                 }}
-                className="text-xs bg-red-600 hover:bg-red-700 text-white font-bold px-4 py-1.5 rounded-full"
+                className="text-xs bg-red-600 hover:bg-red-700 text-white font-bold px-4 py-1.5 rounded-sm"
               >
                 Close Visualizer
               </button>
             </div>
 
             {/* Main Area */}
-            <div className="flex-1 overflow-y-auto p-6 bg-neutral-50/50 space-y-6">
+            <div className="flex-1 overflow-y-auto p-6 bg-[var(--color-surface-dim)] space-y-6">
               {isResponseLoading ? (
                 <div className="flex flex-col items-center justify-center h-full space-y-3">
-                  <div className="animate-spin rounded-full h-8 w-8 border-4 border-[#6750A4] border-t-transparent"></div>
-                  <p className="text-xs font-black text-neutral-600 font-mono">RETRIEVING EXAM WORKSPACE ANSWERS FROM SERVER...</p>
+                  <div className="animate-spin rounded-sm h-8 w-8 border-4 border-[var(--color-primary)] border-t-transparent"></div>
+                  <p className="text-xs font-black text-[var(--color-on-surface-variant)] font-mono">RETRIEVING EXAM WORKSPACE ANSWERS FROM SERVER...</p>
                 </div>
               ) : !viewingResponseData ? (
-                <div className="p-6 bg-rose-50 text-rose-800 border-rose-200 border rounded-2xl text-xs">
+                <div className="p-6 bg-red-950/40 text-red-300 border-red-900/40 border rounded-sm text-xs">
                   <p className="font-bold">Error Loading Student Session Details</p>
                   <p className="mt-1">The system could not load completed question answers for session [{viewingResponseSessionId}]. Check if the session file was purged or reset.</p>
                 </div>
               ) : (
                 <>
                   {/* Top quick stats cards overview */}
-                  <div className="bg-white border rounded-2xl p-5 grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="bg-[var(--color-surface-container)] border border-[var(--color-outline-variant)] rounded-sm p-5 grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>
                       <span className="text-[10px] text-gray-400 font-bold uppercase block mb-0.5">Student Account</span>
-                      <span className="text-sm font-black text-neutral-800 block">[{viewingResponseData.student_id}] {viewingResponseData.student_name}</span>
+                      <span className="text-sm font-black text-[var(--color-on-surface)] block">[{viewingResponseData.student_id}] {viewingResponseData.student_name}</span>
                     </div>
                     <div>
                       <span className="text-[10px] text-gray-400 font-bold uppercase block mb-0.5">Exam blueprint Title</span>
-                      <span className="text-sm font-black text-[#6750A4] block truncate" title={viewingResponseData.event_name}>{viewingResponseData.event_name}</span>
+                      <span className="text-sm font-black text-[var(--color-primary)] block truncate" title={viewingResponseData.event_name}>{viewingResponseData.event_name}</span>
                     </div>
                     <div>
                       <span className="text-[10px] text-gray-400 font-bold uppercase block mb-0.5">Combined Score Summary</span>
-                      <span className="inline-flex items-center gap-1 bg-green-50 text-green-800 border border-green-300 text-xs font-black px-2.5 py-0.5 rounded-lg mt-0.5">
+                      <span className="inline-flex items-center gap-1 bg-green-950/40 text-green-300 border border-green-800/40 text-xs font-black px-2.5 py-0.5 rounded-sm mt-0.5">
                         {viewingResponseData.total_score} / {viewingResponseData.total_possible} pts ({Math.round((viewingResponseData.total_score / viewingResponseData.total_possible) * 100)}%)
                       </span>
                     </div>
                     <div>
                       <span className="text-[10px] text-gray-400 font-bold uppercase block mb-0.5">Submission Timestamp</span>
-                      <span className="text-xs font-bold text-gray-700 block mt-0.5 font-mono">{new Date(viewingResponseData.submitted_at).toLocaleString()}</span>
+                      <span className="text-xs font-bold text-[var(--color-on-surface-variant)] block mt-0.5 font-mono">{new Date(viewingResponseData.submitted_at).toLocaleString()}</span>
                     </div>
                   </div>
 
+                  {viewingResponseData.infraction_count && viewingResponseData.infraction_count > 0 ? (
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-xs text-red-700 flex items-center gap-2 border-solid">
+                      <AlertCircle size={16} className="text-red-500 shrink-0" />
+                      <div>
+                        <p className="font-extrabold text-sm">⚠️ High Integrity Alert: Focus Leaks Detected</p>
+                        <p className="text-[11px] font-medium text-red-600/90 mt-0.5">The proctoring logic recorded <strong>{viewingResponseData.infraction_count} event(s)</strong> of this student navigating away, switching tabs, or resizing/minimizing their test screen.</p>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {/* Questionnaire answers walkthrough */}
                   <div className="space-y-4">
-                    <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider block">Question-by-Question Ledger ({viewingResponseData.questions.length} Items)</span>
+                    <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block">Question-by-Question Ledger ({viewingResponseData.questions.length} Items)</span>
                     
                     {viewingResponseData.questions.map((q: any, index: number) => {
                       const studentResponse = (viewingResponseData.responses && viewingResponseData.responses[q.id]);
@@ -2652,17 +3052,17 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                       const isCorrectMC = isMC && studentResponse === q.correct_mc;
                       
                       return (
-                        <div key={q.id || index} className="bg-white border border-neutral-200 rounded-3xl p-5 space-y-3 shadow-xs">
+                        <div key={q.id || index} className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-5 space-y-3 shadow-xs">
                           <div className="flex justify-between items-start gap-4">
                             <div>
-                              <span className="bg-[#FAF9FD] border border-[#CAC4D0] text-neutral-600 font-mono text-[10px] font-bold px-2 py-0.5 rounded uppercase font-sans">Question {index + 1} ({q.type})</span>
-                              <div className="text-sm font-bold text-neutral-800 mt-2 font-sans">
+                              <span className="bg-[var(--color-surface-dim)] border border-[var(--color-outline-variant)] text-[var(--color-on-surface-variant)] font-mono text-[10px] font-bold px-2 py-0.5 rounded uppercase font-sans">Question {index + 1} ({q.type})</span>
+                              <div className="text-sm font-bold text-[var(--color-on-surface)] mt-2 font-sans">
                                 <LatexRenderer text={q.prompt} />
                               </div>
                             </div>
                             <div className="text-right shrink-0">
                               <span className="text-xs font-bold text-neutral-400 uppercase font-mono block">Points scored</span>
-                              <span className={`text-sm font-mono font-black ${isMC ? (isCorrectMC ? 'text-green-600' : 'text-red-600') : 'text-[#6750A4]'}`}>
+                              <span className={`text-sm font-mono font-black ${isMC ? (isCorrectMC ? 'text-green-400' : 'text-red-400') : 'text-[var(--color-primary)]'}`}>
                                 {isMC ? (isCorrectMC ? q.points : 0) : (q.grade_points !== undefined ? q.grade_points : 0)} / {q.points}
                               </span>
                             </div>
@@ -2670,7 +3070,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                           {/* Image rendering if question has image_url */}
                           {q.image_url && (
-                            <div className="my-3 max-w-md border border-neutral-200 rounded-xl overflow-hidden shadow-2xs">
+                            <div className="my-3 max-w-md border border-[var(--color-outline-variant)] rounded-sm overflow-hidden shadow-2xs">
                               <img 
                                 src={getDirectImageUrl(q.image_url)} 
                                 alt={`Graphic illustration for Question ${index + 1}`} 
@@ -2681,7 +3081,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           )}
 
                           {isMC ? (
-                            <div className="bg-neutral-50 rounded-2xl p-4 border space-y-2">
+                            <div className="bg-[var(--color-surface-dim)] rounded-sm p-4 border border-[var(--color-outline-variant)] space-y-2">
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
                                 {Object.entries(q.options || {}).map(([choiceKey, text]: any) => {
                                   const isSelected = studentResponse === choiceKey;
@@ -2690,23 +3090,23 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                   return (
                                     <div 
                                       key={choiceKey} 
-                                      className={`p-2.5 border rounded-xl flex items-center gap-2.5 text-xs font-semibold ${
+                                      className={`p-2.5 border rounded-sm flex items-center gap-2.5 text-xs font-semibold ${
                                         isSelected 
-                                          ? (isCorrectOption ? 'border-green-500 bg-green-50' : 'border-red-400 bg-red-50/50') 
-                                          : (isCorrectOption ? 'border-green-300 bg-green-50/20' : 'border-neutral-200 bg-white')
+                                          ? (isCorrectOption ? 'border-green-600 bg-green-950/20' : 'border-red-800 bg-red-950/20') 
+                                          : (isCorrectOption ? 'border-green-800/60 bg-green-950/10' : 'border-[var(--color-outline-variant)] bg-[var(--color-surface)]')
                                       }`}
                                     >
-                                      <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[11px] ${
+                                      <span className={`w-5 h-5 rounded-sm flex items-center justify-center font-bold text-[11px] ${
                                         isSelected 
                                           ? (isCorrectOption ? 'bg-green-600 text-white' : 'bg-red-600 text-white') 
-                                          : (isCorrectOption ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500')
+                                          : (isCorrectOption ? 'bg-green-950 text-green-300 border border-green-800/40' : 'bg-[var(--color-surface-dim)] text-[var(--color-on-surface-variant)]')
                                       }`}>{choiceKey}</span>
-                                      <span className="flex-1 font-semibold text-neutral-700">
+                                      <span className="flex-1 font-semibold text-[var(--color-on-surface)]">
                                         <LatexRenderer text={text} />
                                       </span>
                                       
-                                      {isSelected && <span className="text-[9px] font-black uppercase font-mono tracking-wider ml-auto">Selected</span>}
-                                      {!isSelected && isCorrectOption && <span className="text-[9px] text-green-700 font-bold uppercase font-mono tracking-wider ml-auto">Correct Key</span>}
+                                      {isSelected && <span className="text-[9px] font-black uppercase font-mono tracking-wider ml-auto text-[var(--color-primary)]">Selected</span>}
+                                      {!isSelected && isCorrectOption && <span className="text-[9px] text-green-400 font-bold uppercase font-mono tracking-wider ml-auto">Correct Key</span>}
                                     </div>
                                   );
                                 })}
@@ -2715,21 +3115,21 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                           ) : (
                             <div className="space-y-3">
                               {/* Student's draft */}
-                              <div className="bg-slate-50 border rounded-2xl p-4">
-                                <span className="text-[10px] font-bold text-[#49454F] uppercase tracking-wider block mb-1">Student Essay Submission Text</span>
-                                <p className="text-xs text-slate-800 whitespace-pre-wrap font-sans font-semibold leading-relaxed">{studentResponse || <em className="text-gray-400">Blank response submitted.</em>}</p>
+                              <div className="bg-[var(--color-surface-dim)] border border-[var(--color-outline-variant)] rounded-sm p-4">
+                                <span className="text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block mb-1">Student Essay Submission Text</span>
+                                <p className="text-xs text-[var(--color-on-surface)] whitespace-pre-wrap font-sans font-semibold leading-relaxed">{studentResponse || <em className="text-gray-400">Blank response submitted.</em>}</p>
                               </div>
 
                               {/* Rubric references and feedback critiques */}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="border border-amber-200 bg-amber-50/20 rounded-2xl p-4">
-                                  <span className="text-[10px] font-bold text-amber-800 uppercase block mb-1">Grading Rubric guide criteria</span>
-                                  <p className="text-xs text-amber-900 font-mono whitespace-pre-wrap leading-relaxed">{q.rubric_guide || 'No criteria guide specified.'}</p>
+                                <div className="border border-amber-900/60 bg-amber-950/15 rounded-sm p-4">
+                                  <span className="text-[10px] font-bold text-amber-300 uppercase block mb-1">Grading Rubric guide criteria</span>
+                                  <p className="text-xs text-amber-200 font-mono whitespace-pre-wrap leading-relaxed">{q.rubric_guide || 'No criteria guide specified.'}</p>
                                 </div>
 
-                                <div className="border border-violet-200 bg-violet-50/20 rounded-2xl p-4">
-                                  <span className="text-[10px] font-bold text-violet-800 uppercase block mb-1">AI Critique Notes & Supervisor Comments</span>
-                                  <p className="text-xs text-violet-900 whitespace-pre-wrap leading-relaxed italic leading-relaxed">{q.grade_notes || 'No critique comments recorded.'}</p>
+                                <div className="border border-[var(--color-outline-variant)] bg-[var(--color-surface-dim)]/20 rounded-sm p-4">
+                                  <span className="text-[10px] font-bold text-[var(--color-primary)] uppercase block mb-1">AI Critique Notes & Supervisor Comments</span>
+                                  <p className="text-xs text-[var(--color-primary)] whitespace-pre-wrap leading-relaxed italic leading-relaxed">{q.grade_notes || 'No critique comments recorded.'}</p>
                                 </div>
                               </div>
                             </div>
@@ -2739,6 +3139,60 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                     })}
                   </div>
                 </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sleek Dialog overlay for confirmation or alerts */}
+      {customModal && customModal.show && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs select-none">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm max-w-md w-full p-6 shadow-xl space-y-4 animate-fadeIn">
+            <div className="flex items-center gap-2 border-b border-dashed border-[var(--color-outline-variant)] pb-3">
+              {customModal.type === 'confirm' ? (
+                <HelpCircle size={18} className="text-[var(--color-primary)] shrink-0" />
+              ) : customModal.type === 'success' ? (
+                <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />
+              ) : (
+                <AlertCircle size={18} className="text-amber-500 shrink-0" />
+              )}
+              <h3 className="font-sans font-black text-sm tracking-tight text-[var(--color-on-surface)]">
+                {customModal.title}
+              </h3>
+            </div>
+            
+            <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed font-semibold">
+              {customModal.message}
+            </p>
+            
+            <div className="flex justify-end gap-2 pt-2 border-t border-solid border-[var(--color-outline-variant)]">
+              {customModal.type === 'confirm' ? (
+                <>
+                  <button
+                    onClick={() => setCustomModal(null)}
+                    className="px-3.5 py-2 hover:bg-[var(--color-surface-container)] border border-[var(--color-outline-variant)] rounded-sm text-xs font-bold transition-all text-[var(--color-on-surface-variant)]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      const cb = customModal.onConfirm;
+                      setCustomModal(null);
+                      if (cb) cb();
+                    }}
+                    className="px-4 py-2 bg-[var(--color-primary)] hover:opacity-95 text-white rounded-sm text-xs font-black transition-all cursor-pointer"
+                  >
+                    Confirm Action
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setCustomModal(null)}
+                  className="px-5 py-2 bg-[var(--color-primary)] hover:opacity-95 text-white rounded-sm text-xs font-extrabold transition-all cursor-pointer"
+                >
+                  OK
+                </button>
               )}
             </div>
           </div>

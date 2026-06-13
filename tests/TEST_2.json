@@ -1,0 +1,44 @@
+{
+  "test_id": "TEST_2",
+  "event_name": "Cell Physiology Exam",
+  "duration": 30,
+  "active": true,
+  "questions": [
+    {
+      "id": "1",
+      "number": 1,
+      "type": "MC",
+      "prompt": "Which organelle is primarily responsible for ATP production through cellular respiration?",
+      "points": 5,
+      "options": {
+        "A": "Lysosome",
+        "B": "Golgi Apparatus",
+        "C": "Mitochondrion",
+        "D": "Ribosome"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "2",
+      "number": 2,
+      "type": "MC",
+      "prompt": "What is the primary macromolecule component of the cell membrane bilayer?",
+      "points": 5,
+      "options": {
+        "A": "Phospholipids",
+        "B": "Glycoproteins",
+        "C": "Triglycerides",
+        "D": "Polypeptides"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "3",
+      "number": 3,
+      "type": "FRQ",
+      "prompt": "Describe the process of active transport across a cell membrane, and contrast it with facilitated diffusion.",
+      "points": 15,
+      "rubric_guide": "Max 15 pts. 5 pts for defining active transport (moves solutes against concentration gradient using ATP). 5 pts for facilitated diffusion definition (moves down gradient via transport proteins without ATP). 5 pts for clear contrast sentence."
+    }
+  ]
+}
