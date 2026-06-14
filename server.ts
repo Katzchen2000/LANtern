@@ -397,9 +397,9 @@ async function bootstrapDirsAndFiles() {
   } catch (e) {
     const initialRoster: Roster = {
       students: [
-        { student_id: "S001", student_name: "Alice Smith", assigned_tests: ["TEST_1", "TEST_2"] },
-        { student_id: "S002", student_name: "Bob Jones", assigned_tests: ["TEST_1"] },
-        { student_id: "S003", student_name: "Charlie Brown", assigned_tests: ["TEST_2"] }
+        { student_id: "S001", student_name: "Alice Smith", assigned_tests: ["TEST_1", "TEST_2"], email: "alice.smith@school.edu" },
+        { student_id: "S002", student_name: "Bob Jones", assigned_tests: ["TEST_1"], email: "bob.jones@school.edu" },
+        { student_id: "S003", student_name: "Charlie Brown", assigned_tests: ["TEST_2"], email: "charlie@school.edu" }
       ]
     };
     await writeJsonAtomic(rosterPath, initialRoster);
@@ -539,10 +539,52 @@ async function startServer() {
     return cookies;
   }
 
+  // Helpers to retrieve tokens from either cookies or Auth headers
+  function getAdminToken(req: express.Request): string | undefined {
+    const cookies = parseCookies(req);
+    if (cookies['admin_token']) return cookies['admin_token'];
+    const authHeader = req.headers['authorization-admin'] || req.headers['authorization'];
+    if (authHeader) {
+      const str = authHeader.toString();
+      if (str.startsWith('Bearer ')) {
+        return str.substring(7).trim();
+      }
+      return str.trim();
+    }
+    return undefined;
+  }
+
+  function getStudentToken(req: express.Request): string | undefined {
+    const cookies = parseCookies(req);
+    if (cookies['student_token']) return cookies['student_token'];
+    const authHeader = req.headers['authorization-student'] || req.headers['authorization'];
+    if (authHeader) {
+      const str = authHeader.toString();
+      if (str.startsWith('Bearer ')) {
+        return str.substring(7).trim();
+      }
+      return str.trim();
+    }
+    return undefined;
+  }
+
+  function getStudentSessToken(req: express.Request): string | undefined {
+    const cookies = parseCookies(req);
+    if (cookies['student_session_token']) return cookies['student_session_token'];
+    const authHeader = req.headers['authorization-student-session'];
+    if (authHeader) {
+      const str = authHeader.toString();
+      if (str.startsWith('Bearer ')) {
+        return str.substring(7).trim();
+      }
+      return str.trim();
+    }
+    return undefined;
+  }
+
   // Auth Middlewares
   async function adminAuthMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-    const cookies = parseCookies(req);
-    const token = cookies['admin_token'];
+    const token = getAdminToken(req);
     if (!token) {
       return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
@@ -556,8 +598,7 @@ async function startServer() {
   }
 
   async function studentAuthMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-    const cookies = parseCookies(req);
-    const token = cookies['student_token'];
+    const token = getStudentToken(req);
     if (!token) {
       return res.status(401).json({ error: 'Student login required' });
     }
@@ -593,7 +634,15 @@ async function startServer() {
     config.admin_hash = hash;
     config.admin_salt = salt;
     await writeJsonAtomic('data/config.json', config);
-    res.json({ success: true });
+
+    const token = signToken({ admin: true }, config.jwt_secret);
+    res.cookie('admin_token', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    });
+    res.json({ success: true, token });
   });
 
   // Admin Login
@@ -614,7 +663,7 @@ async function startServer() {
       sameSite: 'none',
       maxAge: 24 * 60 * 60 * 1000 // 24 hours
     });
-    res.json({ success: true });
+    res.json({ success: true, token });
   });
 
   // Admin Logout
@@ -2266,7 +2315,7 @@ async function startServer() {
       maxAge: 4 * 60 * 60 * 1000 // 4 hours
     });
 
-    res.json({ success: true, student_id: sObj.student_id, student_name: sObj.student_name });
+    res.json({ success: true, student_id: sObj.student_id, student_name: sObj.student_name, token: studentToken });
   });
 
   app.post('/api/student/logout', (req, res) => {
@@ -2432,7 +2481,7 @@ async function startServer() {
       maxAge: 4 * 60 * 60 * 1000 // 4 hours
     });
 
-    res.json({ success: true, session_id: sessionObj.session_id });
+    res.json({ success: true, session_id: sessionObj.session_id, token: sessionCookieToken });
   });
 
   // Get student test session contents (Strips correct_mc & rubric_guide)
@@ -2443,20 +2492,19 @@ async function startServer() {
       return res.status(404).json({ error: 'Session not found. Please log in again.' });
     }
 
-    // Verify ownership via session cookie or allow admin
-    const cookies = parseCookies(req);
+    // Verify ownership via session token or allow admin
     const config = await retrieveConfig();
     let isAuthorized = false;
 
     // Is admin?
-    const adminToken = cookies['admin_token'];
+    const adminToken = getAdminToken(req);
     if (adminToken) {
       const aPl = verifyToken(adminToken, config.jwt_secret);
       if (aPl && aPl.admin) isAuthorized = true;
     }
 
-    // Is matching student session cookie?
-    const studentSessToken = cookies['student_session_token'];
+    // Is matching student session cookie/header?
+    const studentSessToken = getStudentSessToken(req);
     if (!isAuthorized && studentSessToken) {
       const sPl = verifyToken(studentSessToken, config.jwt_secret);
       if (sPl && sPl.session_id === sessionId) isAuthorized = true;
@@ -2501,10 +2549,8 @@ async function startServer() {
     const sessionId = req.params.id;
     const { answers, infraction_count } = req.body;
 
-    const cookies = parseCookies(req);
     const config = await retrieveConfig();
-
-    const studentSessToken = cookies['student_session_token'];
+    const studentSessToken = getStudentSessToken(req);
     if (!studentSessToken) {
       return res.status(401).json({ error: 'Authentication missing.' });
     }
@@ -2545,10 +2591,8 @@ async function startServer() {
     const sessionId = req.params.id;
     const { count } = req.body;
 
-    const cookies = parseCookies(req);
     const config = await retrieveConfig();
-
-    const studentSessToken = cookies['student_session_token'];
+    const studentSessToken = getStudentSessToken(req);
     if (!studentSessToken) {
       return res.status(401).json({ error: 'Auth credentials missing.' });
     }
@@ -2571,12 +2615,11 @@ async function startServer() {
   app.post('/api/student/session/:id/submit', async (req, res) => {
     try {
       const sessionId = req.params.id;
-      const cookies = parseCookies(req);
       const config = await retrieveConfig();
 
-      const studentSessToken = cookies['student_session_token'];
+      const studentSessToken = getStudentSessToken(req);
       if (!studentSessToken) {
-        console.error('Manual submit failed: missing student_session_token cookie');
+        console.error('Manual submit failed: missing student_session_token');
         return res.status(401).json({ error: 'Auth credentials missing. Please refresh and try again.' });
       }
       

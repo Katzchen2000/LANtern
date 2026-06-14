@@ -1101,7 +1101,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                     <label className="flex flex-col items-center justify-center border-2 border-solid border-[var(--color-outline-variant)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-container)] transition-colors rounded-sm h-36 p-4 text-center cursor-pointer select-none">
                       <Upload size={28} className="text-[var(--color-primary)] mb-2" />
                       <span className="text-sm font-bold block text-[var(--color-on-surface)]">Import CSV Roster</span>
-                      <span className="text-xs text-[var(--color-on-surface-variant)] mt-1">Accepts student_id, student_name template</span>
+                      <span className="text-xs text-[var(--color-on-surface-variant)] mt-1">Accepts student_id, student_name, student_email template</span>
                       <input 
                         type="file" 
                         accept=".csv" 
@@ -1112,7 +1112,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                     <div className="mt-4 flex items-center justify-between">
                       <a 
-                        href={`data:text/csv;charset=utf-8,student_id,student_name,assigned_tests\nS001,Alice Smith,TEST_1;TEST_2\nS002,Bob Jones,TEST_1\nS003,Charlie,TEST_2`}
+                        href={`data:text/csv;charset=utf-8,student_id,student_name,student_email,assigned_tests\nS001,Alice Smith,alice.smith@school.edu,TEST_1;TEST_2\nS002,Bob Jones,bob.jones@school.edu,TEST_1\nS003,Charlie,charlie@school.edu,TEST_2`}
                         download="roster_template.csv"
                         className="text-xs text-[var(--color-primary)] hover:underline font-bold flex items-center gap-1"
                       >
@@ -1662,7 +1662,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                   <span className="font-black text-base text-[var(--color-on-surface)]">Tabular registered roster</span>
                   
                   <a 
-                    href={`data:text/csv;charset=utf-8,student_id,student_name,assigned_tests\n${roster.students.map(s => `${s.student_id},"${s.student_name}","${s.assigned_tests.join(';')}"`).join('\n')}`}
+                    href={`data:text/csv;charset=utf-8,student_id,student_name,student_email,assigned_tests\n${roster.students.map(s => `${s.student_id},"${s.student_name}","${s.email || ''}","${s.assigned_tests.join(';')}"`).join('\n')}`}
                     download="lan_server_roster_dump.csv"
                     className="px-3 py-1.5 bg-[var(--color-primary)] hover:bg-[#533C8A] text-white text-xs font-bold rounded-sm flex items-center gap-1 shadow-xs"
                   >

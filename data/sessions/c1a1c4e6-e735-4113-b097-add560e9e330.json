@@ -1,0 +1,16 @@
+{
+  "session_id": "c1a1c4e6-e735-4113-b097-add560e9e330",
+  "student_id": "S002",
+  "test_id": "TEST_1",
+  "started_at": "2026-06-11T19:38:12.984Z",
+  "expires_at": "2026-06-11T20:08:12.984Z",
+  "submitted_at": null,
+  "status": "in_progress",
+  "session_token": "72e71e9c8695b37270991be59701c4d2",
+  "answers": {
+    "3": {
+      "frq_text": "mklmdkle"
+    }
+  },
+  "infraction_count": 14
+}

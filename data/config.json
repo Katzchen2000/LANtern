@@ -1,9 +1,8 @@
 {
-  "admin_hash": "013c17630b5adb287f804657a56e353cd1f1d0b202006d73c41ad3cc05ad6eccf9cb0305177420a24927bec033a786a464e97b869e7ee1c84e89dd6bb8a41b34",
-  "admin_salt": "f86b6156ed4cd567252efba5d9d1dd8c",
+  "admin_hash": "",
+  "admin_salt": "",
   "jwt_secret": "f06caac633b4390c2c1cb95d5a8988882858b1254eee1c5e105763ce992cea32",
   "server_settings": {
     "created_at": "2026-05-31T01:54:18.050Z"
-  },
-  "gemini_api_key": "AQ.Ab8RN6KfjMRqhll7_Z-r68gOfi2snRHF8-cwkzlWU_mYf0kjMg"
+  }
 }

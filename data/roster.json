@@ -1,11 +1,29 @@
 {
   "students": [
     {
+      "student_id": "S001",
+      "student_name": "Alice Smith",
+      "assigned_tests": [
+        "TEST_1",
+        "TEST_2"
+      ],
+      "email": "alice.smith@school.edu"
+    },
+    {
+      "student_id": "S002",
+      "student_name": "Bob Jones",
+      "assigned_tests": [
+        "TEST_1"
+      ],
+      "email": "bob.jones@school.edu"
+    },
+    {
       "student_id": "S003",
       "student_name": "Charlie Brown",
       "assigned_tests": [
         "TEST_2"
-      ]
+      ],
+      "email": "charlie@school.edu"
     }
   ]
 }

@@ -1,0 +1,24 @@
+{
+  "session_id": "ee68ba0c-e859-4166-8af0-178884609451",
+  "student_id": "S003",
+  "test_id": "TEST_2",
+  "started_at": "2026-06-11T20:04:37.160Z",
+  "expires_at": "2026-06-11T20:34:37.160Z",
+  "submitted_at": null,
+  "status": "in_progress",
+  "session_token": "d399f7fcd3b81d71d7d7ed03224b60f4",
+  "answers": {
+    "1": {
+      "selected_mc": "C",
+      "eliminated": []
+    },
+    "2": {
+      "selected_mc": "D",
+      "eliminated": []
+    },
+    "3": {
+      "frq_text": "ojfeiojfiowjfpiw"
+    }
+  },
+  "infraction_count": 6
+}
