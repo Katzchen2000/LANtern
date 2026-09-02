@@ -1,0 +1,469 @@
+{
+  "test_id": "BOTANY1",
+  "event_name": "Botany 1",
+  "duration": 30,
+  "active": true,
+  "questions": [
+    {
+      "id": "q_1",
+      "number": 1,
+      "type": "MC",
+      "prompt": "Which of the following plant organelles functions in photosynthetic reactions?",
+      "points": 5,
+      "options": {
+        "A": "Chloroplast",
+        "B": "Amyloplast",
+        "C": "Mitochondria",
+        "D": "Ribosome"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "q_hvj7xw",
+      "number": 2,
+      "type": "MC",
+      "prompt": "In the light reactions of photosynthesis, which photosystem is responsible for housing the oxygen-evolving complex?",
+      "points": 5,
+      "options": {
+        "A": "PSI",
+        "B": "PSII",
+        "C": "PSIII",
+        "D": "PSIIII"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_sgyqgz",
+      "number": 3,
+      "type": "MC",
+      "prompt": "How many turns of the Calvin cycle are required to form 1 molecule of glucose?",
+      "points": 5,
+      "options": {
+        "A": "3",
+        "B": "6",
+        "C": "9",
+        "D": "4"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_w9c3s6",
+      "number": 4,
+      "type": "MC",
+      "prompt": "Which of the following is an accurate difference between monocots and dicots?",
+      "points": 5,
+      "options": {
+        "A": "Monocots usually have taproot systems",
+        "B": "Dicots usually have scattered vascular bundles in their stems",
+        "C": "Monocots contain a central pith in their roots",
+        "D": "Grasses are dicots"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_ci11hc",
+      "number": 5,
+      "type": "MC",
+      "prompt": "What is the main function of xylem?",
+      "points": 5,
+      "options": {
+        "A": "Conduction of sugars",
+        "B": "Transport of oxygen gas",
+        "C": "Transport of water and minerals",
+        "D": "Transport of carbon dioxide gas"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "q_ksosmt",
+      "number": 6,
+      "type": "MC",
+      "prompt": "Which scientist’s experiments on pea plants provided the foundations of the study of heredity?",
+      "points": 5,
+      "options": {
+        "A": "Rosalind Franklin",
+        "B": "Carl Linnaeus",
+        "C": "George Washington Carver",
+        "D": "Gregor Mendel "
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "q_63hwth",
+      "number": 7,
+      "type": "MC",
+      "prompt": "Growth of secondary xylem and phloem is facilitated by the:",
+      "points": 5,
+      "options": {
+        "A": "Cork cambium",
+        "B": "Vascular cambium",
+        "C": "Secondary cell walls",
+        "D": "Middle lamellae"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_ab5om6",
+      "number": 8,
+      "type": "MC",
+      "prompt": "Which tissue is primarily responsible for transporting sugars throughout a plant?",
+      "points": 5,
+      "options": {
+        "A": "Xylem",
+        "B": "Phloem",
+        "C": "Sclerenchyma",
+        "D": "Epidermis"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_8e7lnz",
+      "number": 9,
+      "type": "MC",
+      "prompt": "Which type of ground tissue contains thick, lignified secondary walls?",
+      "points": 5,
+      "options": {
+        "A": "Parenchyma",
+        "B": "Collenchyma",
+        "C": "Sclerenchyma",
+        "D": "Aerenchyma"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "q_j0z9po",
+      "number": 10,
+      "type": "MC",
+      "prompt": "What phyllotaxy is demonstrated by the plant on the right? ",
+      "points": 5,
+      "image_url": "https://i0.wp.com/anps.org/wp-content/uploads/2017/06/photo-1-jun-10.jpg?resize=640%2C853&ssl=1",
+      "options": {
+        "A": "Alternate",
+        "B": "Whorl",
+        "C": "Spiral",
+        "D": "Decussate"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_prf2di",
+      "number": 11,
+      "type": "MC",
+      "prompt": "Which method of photosynthesis is characterized by spatial separation of CO2 fixation and the Calvin cycle via bundle-sheath cells?",
+      "points": 5,
+      "options": {
+        "A": "C3",
+        "B": "C4",
+        "C": "CAM",
+        "D": "C6"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_ggjcbg",
+      "number": 12,
+      "type": "MC",
+      "prompt": " In angiosperms, the process of double fertilization leads to the formation of:",
+      "points": 5,
+      "options": {
+        "A": "A triploid endosperm and diploid embryo",
+        "B": "A diploid embryo and diploid endosperm",
+        "C": "A haploid endosperm and diploid embryo",
+        "D": "Nothing"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "q_xlq8bq",
+      "number": 13,
+      "type": "MC",
+      "prompt": "Which of the following plant hormones is important in stimulating ripening of fruits?",
+      "points": 5,
+      "options": {
+        "A": "Jasmonic acid",
+        "B": "Auxin",
+        "C": "Gibberellin",
+        "D": "Ethylene"
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "q_eged91",
+      "number": 14,
+      "type": "MC",
+      "prompt": "The functional root hairs of a plant are removed for an experiment leaving all other root tissues intact. Which process would be most directly impaired?",
+      "points": 5,
+      "options": {
+        "A": "Production of secondary xylem",
+        "B": "Absorption of water and mineral ions from the soil ",
+        "C": "Transport of sugars through the phloem",
+        "D": "Formation of the root cap"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_4jcnm2",
+      "number": 15,
+      "type": "MC",
+      "prompt": "A plant is exposed to prolonged drought. Which response would most directly reduce water loss from its leaves?",
+      "points": 5,
+      "options": {
+        "A": "Stomatal opening mediated by abscisic acid ",
+        "B": "Stomatal closure mediated by abscisic acid",
+        "C": "Secretion of wax onto adaxial surface",
+        "D": "Increased phloem loading"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_mnohj6",
+      "number": 16,
+      "type": "MC",
+      "prompt": "The Casparian strip of the root endodermis is most important because it…",
+      "points": 5,
+      "options": {
+        "A": "Forces water and dissolved ions to cross the cytoplasm and cell membranes",
+        "B": "Prevents all water movement into the vascular cylinder ",
+        "C": "Increases the surface area for photosynthesis maximization ",
+        "D": "Produces all the lateral roots of the plant "
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "q_tftabe",
+      "number": 17,
+      "type": "MC",
+      "prompt": "Which correctly identifies the structure involved in the production and release of pollen in a plant with flowers? ",
+      "points": 5,
+      "options": {
+        "A": "Ovary ",
+        "B": "Filamant ",
+        "C": "Anther ",
+        "D": "Ovule"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "q_fj79de",
+      "number": 18,
+      "type": "MC",
+      "prompt": "Which characteristic most reliably distinguishes bryophytes from vascular plants?",
+      "points": 5,
+      "options": {
+        "A": "Reproduction by seed production ",
+        "B": "Bryophytes lack chlorophyll ",
+        "C": "Bryophytes have an extra membrane in their mitochondrial walls ",
+        "D": "Bryophytes lack vascular tissue such as xylem and phloem"
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "q_imarnu",
+      "number": 19,
+      "type": "MC",
+      "prompt": "Which plant hormone is most strongly associated with maintaining seed dormancy?",
+      "points": 5,
+      "options": {
+        "A": "Abscisic Acid",
+        "B": "Auxin",
+        "C": "Cytokinin ",
+        "D": "Ethylene "
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "q_9h5hoy",
+      "number": 20,
+      "type": "MC",
+      "prompt": "Which statement about genetically modified plants is true?",
+      "points": 5,
+      "options": {
+        "A": "Genetically modified plants can only be created by introducing genes from other species.",
+        "B": "Genetically modified plants have greater fitness in their natural ecosystems",
+        "C": "Genetically modified plants cannot reproduce sexually because their genomes have been altered leading to dysregulation in reproduction.",
+        "D": "None of the above. "
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "q_etky81",
+      "number": 21,
+      "type": "MC",
+      "prompt": "Which of the following is an example of a genetically modified plant trait?",
+      "points": 5,
+      "options": {
+        "A": "A crop line exhibiting heat tolerance after several generations of selective breeding for high-temperature tolerance ",
+        "B": "A crop variety carrying an inserted gene to encode for a protein toxic to specific lepidopteran larvae ",
+        "C": "A crop individual displaying elongated morphology in response to intentional light source changes ",
+        "D": "A crop strain featuring enhanced nutrient uptake resulting from artificially induced mutation for polyploidy"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_a9tes4",
+      "number": 22,
+      "type": "MC",
+      "prompt": "Why are nitrogen-fixing bacteria important to plant communities?",
+      "points": 5,
+      "options": {
+        "A": "They convert oxygen into atmospheric nitrogen during photosynthesis",
+        "B": "They remove nitrogen from soil so plants cannot overconsume it",
+        "C": "They bring nitrogen directly into plant roots",
+        "D": "They convert atmospheric nitrogen into plant-usable forms"
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "q_ilqw2v",
+      "number": 23,
+      "type": "MC",
+      "prompt": "Which of the following pairs are the two most limiting nutrients of plants?",
+      "points": 5,
+      "options": {
+        "A": "Carbon and Oxygen",
+        "B": "Phosphorous and Nitrogen ",
+        "C": "Phosphorus and Oxygen",
+        "D": "Nitrogen and Carbon "
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "q_5hm7i8",
+      "number": 24,
+      "type": "MC",
+      "prompt": "Which statement correctly describes the difference between mobile and immobile nutrients in plants?",
+      "points": 5,
+      "options": {
+        "A": "Mobile nutrients can only be absorbed by the roots, while immobile nutrients can only be absorbed by leaves.",
+        "B": "Mobile nutrients are transported via xylem and immobile nutrients are transported via phloem. ",
+        "C": "Mobile nutrients can be redistributed from older to younger tissues while immobile generally cannot",
+        "D": "Mobile nutrients are only required by mature tissues usually in the leaves, while immobile nutrients are generally only needed by young tissues"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "q_4g66ey",
+      "number": 25,
+      "type": "MC",
+      "prompt": "A plant named CAMeron has developed a dark green, purplish, reddish tint. CAMeron also looks weak and stunted. What nutrient deficiency does CAMeron have?",
+      "points": 5,
+      "options": {
+        "A": "Calcium",
+        "B": "Nitrogen ",
+        "C": "Iron",
+        "D": "Phosphorus "
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "q_r555e9",
+      "number": 26,
+      "type": "MC",
+      "prompt": "A plant produces chemicals that inhibit the germination and growth of nearby competing plants. This is called:",
+      "points": 5,
+      "options": {
+        "A": "Facilitation ",
+        "B": "Mutualism ",
+        "C": "Allelopathy",
+        "D": "Competition "
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "q_71xun4",
+      "number": 27,
+      "type": "MC",
+      "prompt": "During the evolution of plants, the development of which structure most directly improved a plants ability to grow upward and transport water over great distances? ",
+      "points": 5,
+      "options": {
+        "A": "Vascular Tissue",
+        "B": "Root hairs",
+        "C": "Dermal Tissue",
+        "D": "Parenchyma "
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "q_xcyqyq",
+      "number": 28,
+      "type": "MC",
+      "prompt": "A botanist notices that a certain plant species she is studying has evolved to produce flowers that smell like rotting meat. Which of the following is most likely an evolutionary advantage of this? ",
+      "points": 5,
+      "options": {
+        "A": "Preventing herbivores from consuming the plant making its leaves toxic",
+        "B": "Triggering chemical defenses against leaf-eating insects",
+        "C": "Allows for the increasing of salt concentrations to allow for the root to pull more water from soil",
+        "D": "Attracting pollinators that are naturally drawn to decaying organic matter"
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "q_4hoqyv",
+      "number": 29,
+      "type": "FRQ",
+      "prompt": "What structure is shown?",
+      "points": 4,
+      "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQJIzaFeSxWhQAmBlQCLzCAGu3mDQEpMRlvFXzrYUhJsb7wMW9K6wjcfrwN&s=10",
+      "rubric_guide": "Pollen/Pollen Grain - 4 pt for having pollen."
+    },
+    {
+      "id": "q_z6dxu6",
+      "number": 30,
+      "type": "FRQ",
+      "prompt": "What is the ploidy of the structure?",
+      "points": 4,
+      "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQJIzaFeSxWhQAmBlQCLzCAGu3mDQEpMRlvFXzrYUhJsb7wMW9K6wjcfrwN&s=10",
+      "rubric_guide": "Max 4 points for \"haploid\", 2 points for anything mentioning half the normal genetic makeup"
+    },
+    {
+      "id": "q_wq8ko6",
+      "number": 31,
+      "type": "FRQ",
+      "prompt": "In flowering plants where is this structure found?",
+      "points": 4,
+      "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQJIzaFeSxWhQAmBlQCLzCAGu3mDQEpMRlvFXzrYUhJsb7wMW9K6wjcfrwN&s=10",
+      "rubric_guide": "Max 4 points. Only give points for answers containing \"Anther\" or \"anther\""
+    },
+    {
+      "id": "q_hv2hh5",
+      "number": 32,
+      "type": "FRQ",
+      "prompt": "What structure does this eventually develop into that allows it to reach deeper tissues of the plant?",
+      "points": 4,
+      "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQJIzaFeSxWhQAmBlQCLzCAGu3mDQEpMRlvFXzrYUhJsb7wMW9K6wjcfrwN&s=10",
+      "rubric_guide": "Max 4 pts. 4 pts for \"pollen tube\". 2 points for answers containing only \"tube\""
+    },
+    {
+      "id": "q_jqej7x",
+      "number": 33,
+      "type": "FRQ",
+      "prompt": "A species of flowering plant is found in a desert environment where temperatures are high, precipitation is low/infrequent, and water rapidly evaporates from surfaces. \n\nExplain TWO structural OR physiological adaptations that would allow this plant to survive under these conditions. ",
+      "points": 6,
+      "rubric_guide": "Max 6 pts. 6 pts for any answer containing 2 of any of the following examples: thick waxy cuticle, reduced leaf surface area/spines, deep or widespread root systems, succulent water-storage tissues, sunken stomata, or CAM photosynthesis.\n3 pts if only one adaptation is listed. "
+    },
+    {
+      "id": "q_i4k9ns",
+      "number": 34,
+      "type": "FRQ",
+      "prompt": "A species of flowering plant is found in a desert environment where temperatures are high, precipitation is low/infrequent, and water rapidly evaporates from surfaces. \n\nDuring an extended period of drought, explain how the plant could reduce water loss while still obtaining the carbon dioxide necessary for photosynthesis.",
+      "points": 6,
+      "rubric_guide": "Max 6 pts. 6pts for explanation including that plants close their stomata during the hottest/driest parts of the day and, in CAM plants, open them at night to take in CO₂ and store it for use during the day"
+    },
+    {
+      "id": "q_wo3fo6",
+      "number": 35,
+      "type": "FRQ",
+      "prompt": "Pollination can occur through biotic or abiotic agents.\n\nGive one example of a biotic pollination agent and one example of an abiotic pollination agent. ",
+      "points": 4,
+      "rubric_guide": "Max 4 pts. 4 pts for having 1 biotic AND abiotic factors from the lists below: biotic; insects, birds, bats, and abiotic; wind or water. Give only 2 pts is only one is listed. "
+    },
+    {
+      "id": "q_dqgetj",
+      "number": 36,
+      "type": "FRQ",
+      "prompt": "Describe one floral characteristic that would be advantageous for a plant primarily pollinated by wind.",
+      "points": 4,
+      "rubric_guide": "Max 4 pts. 4 pts for any answer including any of the following: Exposed/dangling anthers, lightweight pollen, large/feathery stigmas that capture airborne pollen."
+    }
+  ]
+}

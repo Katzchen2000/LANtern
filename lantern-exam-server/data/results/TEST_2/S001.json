@@ -5,7 +5,12 @@
   "submitted_at": "2026-06-11T20:22:32.415Z",
   "mc_score": 0,
   "mc_total": 10,
-  "frq_grades": {},
+  "frq_grades": {
+    "3": {
+      "score": 0,
+      "notes": "[AI Autograde] The student did not provide a response, therefore no criteria could be evaluated."
+    }
+  },
   "frq_score": 0,
   "frq_total": 15,
   "total_score": 0,

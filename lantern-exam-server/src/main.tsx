@@ -45,6 +45,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     if (
       url.includes('/api/admin/login') ||
       url.includes('/api/admin/setup') ||
+      url.includes('/api/admin/change-password') ||
       url.includes('/api/student/login') ||
       url.includes('/api/student/session') ||
       url.includes('/api/admin/logout') ||
@@ -54,7 +55,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
         const clonedRes = response.clone();
         const data = await clonedRes.json();
         
-        if (url.includes('/api/admin/login') || url.includes('/api/admin/setup')) {
+        if (url.includes('/api/admin/login') || url.includes('/api/admin/setup') || url.includes('/api/admin/change-password')) {
           if (data && data.token) {
             localStorage.setItem('admin_token', data.token);
           }

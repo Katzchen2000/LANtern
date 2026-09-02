@@ -1,0 +1,19 @@
+{
+  "student_id": "S003",
+  "test_id": "TEST_2",
+  "session_id": "ee68ba0c-e859-4166-8af0-178884609451",
+  "submitted_at": "2026-08-24T15:42:02.897Z",
+  "mc_score": 5,
+  "mc_total": 10,
+  "frq_grades": {
+    "3": {
+      "score": 0,
+      "notes": "[AI Autograde] The student response is unintelligible and does not address any part of the prompt or rubric criteria."
+    }
+  },
+  "frq_score": 0,
+  "frq_total": 15,
+  "total_score": 5,
+  "total_possible": 25,
+  "infraction_count": 6
+}

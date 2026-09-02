@@ -1,0 +1,62 @@
+{
+  "students": [
+    {
+      "student_id": "S001",
+      "student_name": "Alice Smith",
+      "assigned_tests": [
+        "TEST_1",
+        "TEST_2",
+        "BOTANY1",
+        "THERMODYNAMICS2"
+      ],
+      "email": "alice.smith@school.edu"
+    },
+    {
+      "student_id": "S002",
+      "student_name": "Bob Jones",
+      "assigned_tests": [
+        "TEST_1",
+        "BOTANY1"
+      ],
+      "email": "bob.jones@school.edu"
+    },
+    {
+      "student_id": "S003",
+      "student_name": "Charlie Brown",
+      "assigned_tests": [
+        "TEST_2",
+        "THERMODYNAMICS2"
+      ],
+      "email": "charlie@school.edu"
+    },
+    {
+      "student_id": "STU101",
+      "student_name": "Alice Smith (STU101)",
+      "assigned_tests": [
+        "BOTANY1",
+        "TEST_1",
+        "TEST_2",
+        "THERMODYNAMICS2"
+      ],
+      "email": "stu101@school.edu"
+    },
+    {
+      "student_id": "STU102",
+      "student_name": "Bob Jones (STU102)",
+      "assigned_tests": [
+        "TEST_1",
+        "BOTANY1"
+      ],
+      "email": "stu102@school.edu"
+    },
+    {
+      "student_id": "STU103",
+      "student_name": "Charlie Brown (STU103)",
+      "assigned_tests": [
+        "TEST_2",
+        "THERMODYNAMICS2"
+      ],
+      "email": "stu103@school.edu"
+    }
+  ]
+}

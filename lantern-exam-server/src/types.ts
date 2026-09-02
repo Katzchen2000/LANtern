@@ -26,6 +26,8 @@ export interface Test {
   active: boolean;
   questions: Question[];
   instructions?: string;
+  start_icon?: string;
+  grades_published?: boolean;
 }
 
 export interface Student {

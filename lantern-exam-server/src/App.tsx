@@ -306,10 +306,10 @@ export default function App() {
           <div className="relative">
             <input 
               type="text"
-              placeholder="student-001"
+              placeholder="XXXX-XXXX-XXXX"
               value={studentIdInput}
               onChange={(e) => setStudentIdInput(e.target.value)}
-              className="w-full text-[15px] border border-[#27272A] bg-[#09090B] focus:border-[#A1A1AA] text-white rounded-sm px-6 py-4 outline-none text-center transition-all placeholder-[#52525B]"
+              className="w-full text-[15px] border border-[#27272A] bg-[#09090B] focus:border-[#A1A1AA] text-white rounded-sm px-6 py-4 outline-none text-center transition-all placeholder-[#52525B] font-mono tracking-wider"
             />
           </div>
 

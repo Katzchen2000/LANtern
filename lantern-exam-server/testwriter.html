@@ -328,18 +328,14 @@
               </div>
 
               <div class="pt-2">
-                <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1">Correct Choice Key</label>
-                <select 
+                <label class="block text-[10px] font-black uppercase text-stone-400 tracking-wider mb-1">Correct Choice Key(s) (comma separated)</label>
+                <input 
+                  type="text"
                   id="field-correct-mc" 
-                  onchange="updateActiveQuestionField('correct_mc', this.value)"
-                  class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 cursor-pointer font-bold"
+                  oninput="updateActiveQuestionField('correct_mc', this.value)"
+                  placeholder="e.g. A, or A,C"
+                  class="w-full bg-[#09090B] border border-[#27272A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500 font-bold"
                 >
-                  <option value="">-- Select Correct Choice --</option>
-                  <option value="A">Choice A</option>
-                  <option value="B">Choice B</option>
-                  <option value="C">Choice C</option>
-                  <option value="D">Choice D</option>
-                </select>
               </div>
             </div>
 
@@ -759,11 +755,12 @@
         mcCont.innerHTML = '';
         const opts = qObj.options || {};
         const isCorrectKey = qObj.correct_mc || '';
+        const correctKeys = isCorrectKey.split(',').map(k => k.trim().toUpperCase());
 
         ['A', 'B', 'C', 'D'].forEach(key => {
           const optText = opts[key] || '';
           if (optText.trim() !== '') {
-            const isTargetCorrect = key === isCorrectKey;
+            const isTargetCorrect = correctKeys.includes(key);
             
             const card = document.createElement('div');
             card.className = `w-full text-left p-3.5 rounded-xl border text-xs md:text-sm transition-all flex items-center justify-between pointer-events-none select-none ${
@@ -899,19 +896,17 @@
         return;
       }
 
+      const filenameBase = file.name.replace(/\.json$/i, '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+
       const reader = new FileReader();
       reader.onload = (event) => {
         try {
           const parsed = JSON.parse(event.target.result);
-          if (!parsed.test_id || !parsed.event_name) {
-            alert("This JSON file doesn't match a standard LANtern Test schema. Make sure test_id and event_name exist.");
-            return;
-          }
 
-          // Convert parsed payload variables safely to currentTest
+          // Convert parsed payload variables safely to currentTest, setting test_id to filename
           currentTest = {
-            test_id: parsed.test_id || "TEST_NEW",
-            event_name: parsed.event_name || "Imported Assessment",
+            test_id: filenameBase || parsed.test_id || "TEST_NEW",
+            event_name: parsed.event_name || parsed.name || (filenameBase ? filenameBase.replace(/_/g, ' ') : "Imported Assessment"),
             duration: parsed.duration || 30,
             active: parsed.active !== undefined ? parsed.active : true,
             instructions: parsed.instructions || "",

@@ -1,0 +1,489 @@
+{
+  "test_id": "thermodynamics_ms_checkpoint_1",
+  "event_name": "Thermodynamics Middle School Checkpoint Test #1",
+  "duration": 50,
+  "active": true,
+  "instructions": "Section I: Multiple Choice & Multi-Select (2 pts each)\nSection II: True/False (2 pts each)\nSection III: Short Answer\nSection IV: Free Response Questions (FRQ)",
+  "grades_published": false,
+  "questions": [
+    {
+      "id": "1",
+      "number": 1,
+      "type": "MC",
+      "prompt": "Which scientist developed the kinetic interpretation of entropy given by: S = k ln W?",
+      "points": 2,
+      "options": {
+        "A": "Maxwell",
+        "B": "Kelvin",
+        "C": "Boltzmann",
+        "D": "Planck"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "2",
+      "number": 2,
+      "type": "MC",
+      "prompt": "Max Planck (1858-1947) is credited with discovering which law of thermodynamic phenomenon?",
+      "points": 2,
+      "options": {
+        "A": "Latent heat",
+        "B": "Blackbody radiation",
+        "C": "Absolute Zero",
+        "D": "Thermal radiation"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "3",
+      "number": 3,
+      "type": "MC",
+      "prompt": "Around which year was the first heat measuring device built?",
+      "points": 2,
+      "options": {
+        "A": "500 CE",
+        "B": "1050 CE",
+        "C": "1600 CE",
+        "D": "1750 CE"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "4",
+      "number": 4,
+      "type": "MC",
+      "prompt": "Which study did the father of thermodynamics Sadi Carnot publish in 1824 to initiate the science of thermodynamics?",
+      "points": 2,
+      "options": {
+        "A": "Reflections on the Motive Power of Fire",
+        "B": "On the Equilibrium of Heterogeneous Substances",
+        "C": "On the measure of moving force",
+        "D": "A New System of Chemistry",
+        "E": "On the Force of Percussion"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "5",
+      "number": 5,
+      "type": "MC",
+      "prompt": "Which scientist combined Avogadro's law with the combined gas law to create the ideal gas law?",
+      "points": 2,
+      "options": {
+        "A": "Henri Victor Regnault",
+        "B": "William Thomson",
+        "C": "Rudolf Julius Emanuel Clausius",
+        "D": "Nicolas Leonard Sadi Carnot",
+        "E": "Amedeo Avogadro"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "6",
+      "number": 6,
+      "type": "MC",
+      "prompt": "Charles’s law describes how:",
+      "points": 2,
+      "options": {
+        "A": "temperature changes with pressure at constant volume",
+        "B": "gas volume changes with temperature at constant pressure",
+        "C": "pressure changes with gas volume at constant temperature",
+        "D": "gas volume stays constant",
+        "E": "pressure relates inversely with kinetic energy"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "7",
+      "number": 7,
+      "type": "MC",
+      "prompt": "Joseph Willard Gibbs is credited with introducing the concepts of:\nI. Free energy\nII. Phase equilibrium\nIII. Thermodynamic potentials",
+      "points": 2,
+      "options": {
+        "A": "I only",
+        "B": "III only",
+        "C": "I and II only",
+        "D": "I, II, and III"
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "8",
+      "number": 8,
+      "type": "MC",
+      "prompt": "Albert Einstein proved ______ motion, which is ______________________.",
+      "points": 2,
+      "options": {
+        "A": "Particle motion; the random, zig-zag movement of tiny particles stuck inside a liquid or a gas",
+        "B": "Brownian motion; the change in position of a tiny object or particle over time",
+        "C": "Particle motion; the change in position of a tiny object or particle over time",
+        "D": "Brownian motion; the random, zig-zag movement of tiny particles stuck inside a liquid or a gas"
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "9",
+      "number": 9,
+      "type": "MC",
+      "prompt": "Order these scientists in terms of their chronological timelines:\nI. James Prescott Joule\nII. Isaac Newton\nIII. Nicolas Leonard Sadi Carnot\nIV. Albert Einstein\nV. William Thomson",
+      "points": 2,
+      "options": {
+        "A": "II, I, III, IV, V",
+        "B": "II, III, I, V, IV",
+        "C": "II, V, III, I, IV",
+        "D": "II, I, III, V, IV"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "10",
+      "number": 10,
+      "type": "MC",
+      "prompt": "Which accurately describes the 2nd law of Thermodynamics?",
+      "points": 2,
+      "options": {
+        "A": "\"Heat cannot spontaneously flow from a colder location to a hotter location.\"",
+        "B": "\"A change in the internal energy of a closed thermodynamic system is equal to the difference between the heat supplied to the system and the amount of work done by the system on its surroundings.\"",
+        "C": "\"If two systems are each in thermal equilibrium with a third, they are also in thermal equilibrium with each other.\"",
+        "D": "\"The entropy of a perfect crystal of any pure substance approaches zero as the temperature approaches absolute zero, and as a system approaches absolute zero, all processes cease and the entropy of the system approaches a minimum value.\""
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "11",
+      "number": 11,
+      "type": "MC",
+      "prompt": "Which of the following is NOT a state function?",
+      "points": 2,
+      "options": {
+        "A": "Temperature",
+        "B": "Pressure",
+        "C": "Heat",
+        "D": "Entropy",
+        "E": "Enthalpy"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "12",
+      "number": 12,
+      "type": "MC",
+      "prompt": "When entropy increases, which of the following could occur?",
+      "points": 2,
+      "options": {
+        "A": "A gas is compressed",
+        "B": "A liquid freezes",
+        "C": "A gas condenses",
+        "D": "A solid melts"
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "13",
+      "number": 13,
+      "type": "MC",
+      "prompt": "Which of the following is a real life example of an Isobaric process?",
+      "points": 2,
+      "options": {
+        "A": "Cloud formation",
+        "B": "Pressure cooker",
+        "C": "Diesel engine",
+        "D": "Hot air balloon"
+      },
+      "correct_mc": "D"
+    },
+    {
+      "id": "14",
+      "number": 14,
+      "type": "MC",
+      "prompt": "Entropy is the Greek word for:",
+      "points": 2,
+      "options": {
+        "A": "Randomness",
+        "B": "Probability",
+        "C": "Transformation",
+        "D": "System"
+      },
+      "correct_mc": "C"
+    },
+    {
+      "id": "15",
+      "number": 15,
+      "type": "MC",
+      "prompt": "Which set of signs for entropy and enthalpy will be thermodynamically favorable at all temperatures?",
+      "points": 2,
+      "options": {
+        "A": "∆H < 0, ∆S > 0",
+        "B": "∆H < 0, ∆S < 0",
+        "C": "∆H > 0, ∆S > 0",
+        "D": "∆H > 0, ∆S < 0"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "16",
+      "number": 16,
+      "type": "MC",
+      "prompt": "A Carnot heat engine operates between a high-temperature heat reservoir at T_H = 500 K and a low-temperature heat reservoir at T_C = 300 K. During each cycle, the engine absorbs 1200 J of heat from the hot reservoir (Q_H = 1200 J).\n\nWhat is the theoretical Carnot efficiency of this engine, and how much net mechanical work (W_net) is produced per cycle?",
+      "points": 2,
+      "options": {
+        "A": "Efficiency = 40%, Work = 480 J",
+        "B": "Efficiency = 60%, Work = 720 J",
+        "C": "Efficiency = 40%, Work = 720 J",
+        "D": "Efficiency = 60%, Work = 480 J"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "17",
+      "number": 17,
+      "type": "MC",
+      "prompt": "Which of the following properties are state functions (properties whose value depends only on the current equilibrium state of the system, not on the path taken)? (Choose all that apply.)",
+      "points": 2,
+      "options": {
+        "A": "Internal energy (U)",
+        "B": "Heat transferred (Q)",
+        "C": "Entropy (S)",
+        "D": "Work performed (W)",
+        "E": "Enthalpy (H)"
+      },
+      "correct_mc": "A, C, E"
+    },
+    {
+      "id": "18",
+      "number": 18,
+      "type": "MC",
+      "prompt": "Which of the following physical processes result in an INCREASE in the entropy of the system (ΔS_system > 0)? (Choose all that apply.)",
+      "points": 2,
+      "options": {
+        "A": "Sublimation of dry ice (solid CO2 to CO2 gas)",
+        "B": "Condensation of water vapor into liquid water",
+        "C": "Dissolving crystalline table salt (NaCl) in water",
+        "D": "Freezing liquid water into ice",
+        "E": "Isothermal free expansion of an ideal gas into a vacuum"
+      },
+      "correct_mc": "A, C, E"
+    },
+    {
+      "id": "19",
+      "number": 19,
+      "type": "MC",
+      "prompt": "Which of the following statements regarding the ideal Carnot cycle and heat engines are TRUE? (Choose all that apply.)",
+      "points": 2,
+      "options": {
+        "A": "The Carnot cycle consists of two reversible isothermal processes and two reversible adiabatic processes.",
+        "B": "No heat engine operating between two given thermal reservoirs can be more efficient than a Carnot engine operating between the same reservoirs.",
+        "C": "A Carnot engine can achieve 100% thermal efficiency if the hot reservoir is at 1000 K and the cold reservoir is at 300 K.",
+        "D": "During the isothermal expansion step of the Carnot cycle, the internal energy of an ideal gas remains constant (ΔU = 0).",
+        "E": "All real, irreversible heat engines produce more work than a reversible Carnot engine operating between identical temperatures."
+      },
+      "correct_mc": "A, B, D"
+    },
+    {
+      "id": "20",
+      "number": 20,
+      "type": "MC",
+      "prompt": "Which of the following modes of thermal energy transfer REQUIRE a material medium (matter) to propagate? (Choose all that apply.)",
+      "points": 2,
+      "options": {
+        "A": "Conduction",
+        "B": "Convection",
+        "C": "Thermal Radiation"
+      },
+      "correct_mc": "A, B"
+    },
+    {
+      "id": "21",
+      "number": 21,
+      "type": "MC",
+      "prompt": "True/False: Is Entropy a conserved quantity?",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "22",
+      "number": 22,
+      "type": "MC",
+      "prompt": "True/False: Ozone formation from O2 is not spontaneous under standard conditions.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "23",
+      "number": 23,
+      "type": "MC",
+      "prompt": "True/False: Solids have less entropy than gases.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "24",
+      "number": 24,
+      "type": "MC",
+      "prompt": "True/False: Heat engines work by transferring heat from a cold sink to a hot source.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "25",
+      "number": 25,
+      "type": "MC",
+      "prompt": "True/False: The Rankine scale is relative to the Fahrenheit scale.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "26",
+      "number": 26,
+      "type": "MC",
+      "prompt": "True/False: Newton's Law of Cooling states that the rate at which an object’s temperature changes is inversely proportional to the difference between its own temperature and the surrounding temperature.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "27",
+      "number": 27,
+      "type": "MC",
+      "prompt": "True/False: Heat spontaneously flows from hot locations to cold locations.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "28",
+      "number": 28,
+      "type": "MC",
+      "prompt": "True/False: The average kinetic energy of gas particles is proportional to the temperature of the system and depends only on it.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "29",
+      "number": 29,
+      "type": "MC",
+      "prompt": "True/False: The Carnot Cycle is irreversible.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "B"
+    },
+    {
+      "id": "30",
+      "number": 30,
+      "type": "MC",
+      "prompt": "True/False: Internal energy is the total microscopic energy of molecules.",
+      "points": 2,
+      "options": {
+        "A": "True",
+        "B": "False"
+      },
+      "correct_mc": "A"
+    },
+    {
+      "id": "31",
+      "number": 31,
+      "type": "FRQ",
+      "prompt": "What are the 3 modes of heat transfer? List all three.",
+      "points": 3,
+      "rubric_guide": "Conduction, Convection, Radiation. (1 pt for each mode correctly identified; full 3 pts for all three)."
+    },
+    {
+      "id": "32",
+      "number": 32,
+      "type": "FRQ",
+      "prompt": "What are the 4 successive steps of the ideal Carnot cycle?",
+      "points": 4,
+      "rubric_guide": "1. Isothermal expansion (absorbing heat from hot reservoir)\n2. Adiabatic/isentropic expansion\n3. Isothermal compression (rejecting heat to cold reservoir)\n4. Adiabatic/isentropic compression. (1 pt for each step correctly stated in order)."
+    },
+    {
+      "id": "33",
+      "number": 33,
+      "type": "FRQ",
+      "prompt": "How do double-paned windows work to minimize heat loss?",
+      "points": 3,
+      "rubric_guide": "They trap a layer of static/still air (or an inert gas such as argon/krypton) between two sheets of glass. Because still air has low thermal conductivity and convection currents are restricted in the narrow gap, conductive and convective heat transfer between the interior and exterior are significantly minimized."
+    },
+    {
+      "id": "34",
+      "number": 34,
+      "type": "FRQ",
+      "prompt": "How are latent heat and sensible heat different? Explain how each behaves during temperature changes and phase transitions.",
+      "points": 4,
+      "rubric_guide": "Sensible heat is heat energy exchanged that results in a measurable temperature change of a substance without a change in phase (detectable with a thermometer). Latent heat is the 'hidden' thermal energy absorbed or released at constant temperature during a phase change (e.g., solid to liquid or liquid to gas) used to break or form intermolecular bonds without changing the thermometer reading."
+    },
+    {
+      "id": "35",
+      "number": 35,
+      "type": "FRQ",
+      "prompt": "What is the eutectic point?",
+      "points": 3,
+      "rubric_guide": "The eutectic point is the specific ratio or composition of two or more solid/liquid components that produces the lowest possible melting/solidification point of any combination of those substances, lower than the melting point of any of its individual constituents."
+    },
+    {
+      "id": "36",
+      "number": 36,
+      "type": "FRQ",
+      "prompt": "Explain the concept of Carnot efficiency:\n(a) Write the mathematical formula for the maximum theoretical efficiency (η) of a heat engine operating between a hot reservoir at temperature T_H and a cold reservoir at temperature T_C (with temperatures in Kelvin).\n(b) Explain why no real heat engine operating between these two temperatures can achieve 100% efficiency according to the Second Law of Thermodynamics.",
+      "points": 5,
+      "rubric_guide": "(a) Formula: η = 1 - (T_C / T_H) or (T_H - T_C) / T_H, with temperatures specified in Kelvin (2 pts).\n(b) For efficiency to reach 100% (η = 1), the cold reservoir temperature T_C would have to be absolute zero (0 K, which is impossible by the Third Law), or zero heat would be rejected (Q_C = 0). The Kelvin-Planck statement of the Second Law dictates that no engine can convert 100% of absorbed heat into net work in a cyclic process without rejecting some waste heat to a colder sink (3 pts)."
+    },
+    {
+      "id": "37",
+      "number": 37,
+      "type": "FRQ",
+      "prompt": "On a Pressure-Volume (P-V) indicator diagram for the Carnot cycle:\n(a) What does the geometric area enclosed by the four-process loop represent?\n(b) Explain the difference between isothermal expansion and adiabatic expansion in terms of heat transfer (Q), internal energy (ΔU), and temperature change (ΔT).",
+      "points": 5,
+      "rubric_guide": "(a) The enclosed area inside the closed P-V loop represents the net mechanical work done by the gas during one complete cycle (W_net = Q_H - Q_C) (2 pts).\n(b) In isothermal expansion: temperature remains constant (ΔT = 0, ΔU = 0), so heat absorbed from the hot reservoir equals the expansion work done (Q_in = W). In adiabatic expansion: the system is thermally insulated (Q = 0), meaning all expansion work is done at the expense of internal energy (W = -ΔU), resulting in a decrease in temperature (ΔT < 0) (3 pts)."
+    },
+    {
+      "id": "38",
+      "number": 38,
+      "type": "FRQ",
+      "prompt": "Entropy is a foundational concept in thermodynamics.\n(a) Define entropy from both a macroscopic (classical thermodynamic) and microscopic (statistical mechanics) perspective.\n(b) In Boltzmann's formula S = k * ln(W), identify the meaning of the variables 'k' and 'W'.\n(c) According to the Second Law of Thermodynamics, what must happen to the total entropy of an isolated system (or the universe) during any spontaneous irreversible process?",
+      "points": 5,
+      "rubric_guide": "(a) Macroscopic: measure of unavailable thermal energy per unit temperature (dS = dQ_rev / T) or the tendency toward thermodynamic equilibrium. Microscopic: a measure of the molecular disorder or number of available microstates corresponding to a given macrostate (2 pts).\n(b) 'k' is Boltzmann's constant (1.38 x 10^-23 J/K); 'W' is the thermodynamic probability or the number of microscopic states (microstates) available to the system (2 pts).\n(c) The total entropy of an isolated system/universe must strictly increase (ΔS_total > 0) during any spontaneous irreversible process (1 pt)."
+    },
+    {
+      "id": "39",
+      "number": 39,
+      "type": "FRQ",
+      "prompt": "Refer to the water phase diagram image provided below:\n\n(a) Define the phenomenon of regelation.\n(b) Using the solid-liquid (fusion) phase boundary line on the diagram, describe what makes water's phase behavior unique compared to most other substances, and explain the thermodynamic mechanism by which applying pressure causes ice to melt and then refreeze.",
+      "image_url": "https://wirecrafted.com/wp-content/images/col-Triple-Point-Of-Water-Phase-Diagram.jpg",
+      "points": 6,
+      "rubric_guide": "(a) Definition: Regelation is the physical phenomenon where ice melts into water under applied pressure and subsequently refreezes into ice when the pressure is relieved (2 pts).\n(b) Water Phase Diagram Explanation: Water is anomalous because its solid-liquid (fusion) boundary line has a negative (left-leaning) slope (dP/dT < 0), whereas almost all other substances have a positive slope. This occurs because liquid water is denser than solid ice (ice expands upon freezing). When high pressure is applied to ice just below 0°C, increasing pressure shifts the system across the negative slope boundary into the liquid phase, lowering the effective melting point. When the pressure is removed, the melting point returns to normal, causing the liquid to refreeze into ice (4 pts)."
+    }
+  ]
+}

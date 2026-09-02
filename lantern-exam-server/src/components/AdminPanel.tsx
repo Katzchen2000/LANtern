@@ -3,7 +3,8 @@ import {
   BarChart, BookOpen, Users, Activity, FileText, Settings, LogOut,
   Upload, Download, Plus, Trash2, Edit, Save, ArrowRight, ShieldCheck,
   PlusCircle, RefreshCw, Key, HelpCircle, Check, Database, Clock, Play, Sparkles, Bot, AlertCircle, Eye,
-  Mail, Trash, CheckCircle2
+  Mail, Trash, CheckCircle2, XCircle, X, Send, Globe, CheckSquare, Square, Lock, Unlock, FileCheck2, Filter, Search,
+  AlertTriangle, Zap
 } from 'lucide-react';
 import { Test, Question, Student, Roster, Session, Result } from '../types';
 import { LatexRenderer } from './LatexRenderer';
@@ -47,7 +48,7 @@ function estimateFrqTokens(item: { prompt?: string; rubric_guide?: string; stude
   const responseWords = (item.student_response || '').trim().split(/\s+/).filter(Boolean).length;
   const totalWords = promptWords + rubricWords + responseWords;
   
-  const estimatedInputTokens = Math.ceil(totalWords * 1.35) + 600;
+  const estimatedInputTokens = Math.round(totalWords * 1.38) + 600;
   const estimatedOutputTokens = 300;
   
   return Math.max(800, estimatedInputTokens + estimatedOutputTokens);
@@ -57,7 +58,7 @@ interface AdminPanelProps {
   onLogout: () => void;
 }
 
-type AdminSection = 'dashboard' | 'tests' | 'roster' | 'sessions' | 'grading' | 'settings';
+type AdminSection = 'dashboard' | 'tests' | 'roster' | 'sessions' | 'grading' | 'publish-grades' | 'settings';
 
 export default function AdminPanel({ onLogout }: AdminPanelProps) {
   const [activeTab, setActiveTab ] = useState<AdminSection>('dashboard');
@@ -71,6 +72,23 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
   const [gradingResults, setGradingResults] = useState<any[]>([]);
   const [isAutograding, setIsAutograding] = useState(false);
   const [autogradingMessage, setAutogradingMessage] = useState('');
+
+  // Publish Grades Panel state
+  const [selectedPublishTestIds, setSelectedPublishTestIds] = useState<string[]>([]);
+  const [publishSearchQuery, setPublishSearchQuery] = useState('');
+  const [publishStatusFilter, setPublishStatusFilter] = useState<'all' | 'published' | 'unpublished'>('all');
+  const [isBatchPublishing, setIsBatchPublishing] = useState(false);
+  const [isBatchEmailing, setIsBatchEmailing] = useState(false);
+
+  // Testing Analytics state in Publish Grades
+  const [publishSubTab, setPublishSubTab] = useState<'checklist' | 'analytics'>('checklist');
+  const [analyticsTestId, setAnalyticsTestId] = useState<string>('');
+  const [analyticsData, setAnalyticsData] = useState<any | null>(null);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState<boolean>(false);
+  const [analyticsSearchQuery, setAnalyticsSearchQuery] = useState<string>('');
+  const [analyticsTypeFilter, setAnalyticsTypeFilter] = useState<'all' | 'MC' | 'FRQ'>('all');
+  const [analyticsDifficultyFilter, setAnalyticsDifficultyFilter] = useState<'all' | 'Easy' | 'Moderate' | 'Hard'>('all');
+  const [expandedSampleResponses, setExpandedSampleResponses] = useState<Record<string, boolean>>({});
 
   // Active item detail selections
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
@@ -88,12 +106,26 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
   // Secrets management
   const [secretsStatus, setSecretsStatus] = useState<{
     is_configured: boolean;
+    active_provider?: 'groq' | 'openrouter' | 'gemini' | 'none';
     masked_key: string;
+    groq_configured?: boolean;
+    groq_masked_key?: string;
+    openrouter_configured?: boolean;
+    openrouter_masked_key?: string;
+    gemini_configured?: boolean;
+    gemini_masked_key?: string;
     gemini_usage_left?: number;
     gemini_quota_limit?: number;
     estimated_frqs_left?: number;
   } | null>(null);
   const [newGeminiKey, setNewGeminiKey] = useState('');
+  const [newGroqKey, setNewGroqKey] = useState('');
+  const [newOpenrouterKey, setNewOpenrouterKey] = useState('');
+
+  // Student Test Participation state
+  const [viewingParticipationTestId, setViewingParticipationTestId] = useState<string | null>(null);
+  const [participationModalTab, setParticipationModalTab] = useState<'pending' | 'in_progress' | 'completed' | 'all'>('pending');
+  const [participationSearch, setParticipationSearch] = useState('');
 
   // Centralized Custom Non-Blocking Modal/Alert State
   const [customModal, setCustomModal] = useState<{
@@ -164,6 +196,12 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
   const [viewingResponseSessionId, setViewingResponseSessionId] = useState<string | null>(null);
   const [viewingResponseData, setViewingResponseData] = useState<{ session: Session; test: Test } | null>(null);
   const [isResponseLoading, setIsResponseLoading] = useState(false);
+
+  // Manual generic grading states
+  const [manualGradeTarget, setManualGradeTarget] = useState<any>(null);
+  const [manualGradeScore, setManualGradeScore] = useState<number | ''>('');
+  const [manualGradeNotes, setManualGradeNotes] = useState('');
+  const [isAiEvaluatingSingle, setIsAiEvaluatingSingle] = useState(false);
 
   // Manual supervisor override commands select
   const [overrideStudentId, setOverrideStudentId] = useState('');
@@ -236,7 +274,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
   const handleAiAutograde = async () => {
     setIsAutograding(true);
-    setAutogradingMessage('Initiating Gemini AI connection...');
+    setAutogradingMessage('Evaluating responses with Gemini Flash Lite...');
     try {
       const res = await fetch('/api/admin/grading/autograde', {
         method: 'POST',
@@ -245,21 +283,55 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
-          alert(`AI Autograding complete! Graded ${data.graded_count} pending essay responses.`);
+          triggerSuccess('AI Autograding Complete', data.message || `Successfully evaluated ${data.graded_count} short essay response(s) with Gemini AI.`);
         } else {
-          alert(data.message || 'AI Autograding completed.');
+          triggerAlert('AI Autograding Status', data.message || 'AI Autograding finished.');
         }
         fetchGradingQueue();
         fetchSecretsStatus();
       } else {
-        const err = await res.json();
-        alert('AI Autograding failed: ' + (err.error || 'Server error.'));
+        const err = await res.json().catch(() => ({}));
+        triggerAlert('AI Grading Failed', err.error || 'Server error during AI grading. Please check your Gemini API key under Settings > Secrets.');
       }
     } catch (e: any) {
-      alert('AI Autograding network error: ' + e.message);
+      triggerAlert('AI Grading Network Error', e.message || 'Network error occurred while connecting to AI grading service.');
     } finally {
       setIsAutograding(false);
       setAutogradingMessage('');
+    }
+  };
+
+  const handleAiSuggestSingle = async () => {
+    if (!manualGradeTarget) return;
+    setIsAiEvaluatingSingle(true);
+    try {
+      const res = await fetch('/api/admin/grading/ai-single', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: manualGradeTarget.prompt,
+          rubric_guide: manualGradeTarget.rubric_guide,
+          points: manualGradeTarget.points,
+          student_response: manualGradeTarget.student_response
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setManualGradeScore(data.score);
+          setManualGradeNotes(`[AI Evaluator] ${data.notes}`);
+          fetchSecretsStatus();
+        } else {
+          triggerAlert('AI Suggestion Notice', data.error || 'Could not generate suggestion.');
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        triggerAlert('AI Suggestion Failed', err.error || 'Server error during AI evaluation.');
+      }
+    } catch (e: any) {
+      triggerAlert('AI Network Error', e.message || 'Error requesting AI suggestion.');
+    } finally {
+      setIsAiEvaluatingSingle(false);
     }
   };
 
@@ -381,27 +453,37 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
     }
   };
 
-  // Commit Gemini API Key secret configuration
-  const handleSaveSecrets = async () => {
-    if (!newGeminiKey.trim()) {
-      return alert('API Key cannot be empty.');
+  // Commit AI API Key secret configuration (Groq, OpenRouter, or Gemini)
+  const handleSaveSecrets = async (overridePayload?: { groq_api_key?: string; openrouter_api_key?: string; gemini_api_key?: string; preferred_ai_provider?: string }) => {
+    const payload = overridePayload || {
+      ...(newGroqKey.trim() ? { groq_api_key: newGroqKey.trim() } : {}),
+      ...(newOpenrouterKey.trim() ? { openrouter_api_key: newOpenrouterKey.trim() } : {}),
+      ...(newGeminiKey.trim() ? { gemini_api_key: newGeminiKey.trim() } : {})
+    };
+
+    if (Object.keys(payload).length === 0) {
+      triggerAlert('Input Required', 'Please enter at least one API key (Groq, OpenRouter, or Gemini) to save.');
+      return;
     }
+
     try {
       const res = await fetch('/api/admin/secrets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gemini_api_key: newGeminiKey })
+        body: JSON.stringify(payload)
       });
       if (res.ok) {
-        alert('GEMINI_API_KEY saved successfully and loaded in memory!');
+        triggerSuccess('Keys Saved', 'AI API Key(s) saved successfully and active on the grading server!');
+        setNewGroqKey('');
+        setNewOpenrouterKey('');
         setNewGeminiKey('');
         fetchSecretsStatus();
       } else {
         const err = await res.json();
-        alert('Failed to save key: ' + (err.error || 'Unknown error'));
+        triggerAlert('Failed to Save Key', err.error || 'Unknown server error saving API keys.');
       }
-    } catch (e) {
-      alert('Network error saving secrets key.');
+    } catch (e: any) {
+      triggerAlert('Network Error', e.message || 'Network error saving API key secrets.');
     }
   };
 
@@ -427,6 +509,41 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
     }
   };
 
+  // Fetch Testing Analytics for a specific test
+  const fetchTestAnalytics = async (tId: string) => {
+    if (!tId) return;
+    setIsLoadingAnalytics(true);
+    try {
+      const res = await fetch(`/api/admin/tests/${encodeURIComponent(tId)}/analytics`);
+      if (res.ok) {
+        const data = await res.json();
+        setAnalyticsData(data);
+      } else {
+        setAnalyticsData(null);
+      }
+    } catch (e) {
+      console.error('Error fetching analytics:', e);
+      setAnalyticsData(null);
+    } finally {
+      setIsLoadingAnalytics(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'publish-grades' || activeTab === 'grading') {
+      fetchGradingQueue();
+    }
+    if (activeTab === 'publish-grades' && publishSubTab === 'analytics') {
+      if (!analyticsTestId && tests.length > 0) {
+        const firstId = tests[0].test_id;
+        setAnalyticsTestId(firstId);
+        fetchTestAnalytics(firstId);
+      } else if (analyticsTestId) {
+        fetchTestAnalytics(analyticsTestId);
+      }
+    }
+  }, [activeTab, publishSubTab, analyticsTestId, tests]);
+
   // Full Refresh Trigger
   const triggerMasterRefresh = () => {
     fetchMetadata();
@@ -437,7 +554,302 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
     fetchSecretsStatus();
     fetchSmtpConfig();
     fetchOutboundEmails();
+    if (analyticsTestId) {
+      fetchTestAnalytics(analyticsTestId);
+    }
   };
+
+  // Helper to compute student test participation and pending test takers
+  const getTestParticipation = (testId: string, eventName?: string) => {
+    const cleanStr = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const tIdClean = cleanStr(testId);
+    const evClean = cleanStr(eventName || '');
+
+    // 1. Get all assigned students from roster
+    const assignedStudents = roster.students.filter(s => {
+      const assigned = s.assigned_tests || [];
+      return assigned.some(at => {
+        if (!at) return false;
+        if (at === testId || (eventName && at === eventName)) return true;
+        const atClean = cleanStr(at);
+        return atClean === tIdClean || (evClean && atClean === evClean);
+      });
+    });
+
+    // 2. Identify completed student IDs
+    const completedResults = gradingResults.filter(r => {
+      return r.test_id === testId || (eventName && r.test_id === eventName) || cleanStr(r.test_id) === tIdClean || (evClean && cleanStr(r.test_id) === evClean);
+    });
+    const completedStudentIds = new Set(completedResults.map(r => r.student_id.toUpperCase()));
+
+    // 3. Identify in-progress student IDs from liveSessions
+    const inProgressSessions = liveSessions.filter(s => {
+      if (s.status !== 'in_progress') return false;
+      return s.test_id === testId || cleanStr(s.test_id) === tIdClean || (evClean && cleanStr(s.test_id) === evClean);
+    });
+    const inProgressStudentIds = new Set(inProgressSessions.map(s => s.student_id.toUpperCase()));
+
+    // 4. Categorize assigned students
+    const completedList: { student_id: string; student_name: string; email?: string }[] = [];
+    const inProgressList: { student_id: string; student_name: string; email?: string }[] = [];
+    const pendingList: { student_id: string; student_name: string; email?: string }[] = [];
+
+    const allTargetStudentIds = new Set([
+      ...assignedStudents.map(s => s.student_id.toUpperCase()),
+      ...completedStudentIds,
+      ...inProgressStudentIds
+    ]);
+
+    allTargetStudentIds.forEach(sId => {
+      const studentObj = roster.students.find(s => s.student_id.toUpperCase() === sId) || {
+        student_id: sId,
+        student_name: completedResults.find(r => r.student_id.toUpperCase() === sId)?.student_name || sId,
+        email: undefined,
+        assigned_tests: [testId]
+      };
+
+      if (completedStudentIds.has(sId)) {
+        completedList.push(studentObj);
+      } else if (inProgressStudentIds.has(sId)) {
+        inProgressList.push(studentObj);
+      } else {
+        pendingList.push(studentObj);
+      }
+    });
+
+    return {
+      totalAssigned: allTargetStudentIds.size,
+      completedList,
+      inProgressList,
+      pendingList,
+      completedCount: completedList.length,
+      inProgressCount: inProgressList.length,
+      pendingCount: pendingList.length,
+      stillToTakeCount: pendingList.length + inProgressList.length
+    };
+  };
+
+  const renderParticipationModal = () => {
+    if (!viewingParticipationTestId) return null;
+
+    const targetTest = tests.find(t => t.test_id === viewingParticipationTestId);
+    const testTitle = targetTest?.event_name || viewingParticipationTestId;
+    const part = getTestParticipation(viewingParticipationTestId, targetTest?.event_name);
+
+    let activeList: { student_id: string; student_name: string; email?: string; status: 'pending' | 'in_progress' | 'completed' }[] = [];
+
+    part.pendingList.forEach(s => activeList.push({ ...s, status: 'pending' }));
+    part.inProgressList.forEach(s => activeList.push({ ...s, status: 'in_progress' }));
+    part.completedList.forEach(s => activeList.push({ ...s, status: 'completed' }));
+
+    if (participationModalTab === 'pending') {
+      activeList = activeList.filter(s => s.status === 'pending');
+    } else if (participationModalTab === 'in_progress') {
+      activeList = activeList.filter(s => s.status === 'in_progress');
+    } else if (participationModalTab === 'completed') {
+      activeList = activeList.filter(s => s.status === 'completed');
+    }
+
+    if (participationSearch.trim()) {
+      const q = participationSearch.toLowerCase();
+      activeList = activeList.filter(s => s.student_name.toLowerCase().includes(q) || s.student_id.toLowerCase().includes(q) || (s.email || '').toLowerCase().includes(q));
+    }
+
+    return (
+      <div className="fixed inset-0 bg-black/80 backdrop-blur-xs z-[250] flex items-center justify-center p-4 animate-fadeIn">
+        <div className="bg-[#18181B] border border-solid border-[var(--color-outline-variant)] w-full max-w-3xl rounded-sm shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+          {/* Header */}
+          <div className="p-5 bg-[#09090B] border-b border-[var(--color-outline-variant)] flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-mono text-xs font-bold text-[var(--color-primary)] bg-violet-950/40 px-2.5 py-0.5 rounded border border-[var(--color-primary)]/40">
+                  {viewingParticipationTestId}
+                </span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                  Roster Participation Tracker
+                </span>
+              </div>
+              <h2 className="text-xl font-black text-white">{testTitle}</h2>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                {part.pendingCount} student(s) still have to take this test out of {part.totalAssigned} total assigned.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setViewingParticipationTestId(null);
+                setParticipationSearch('');
+              }}
+              className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors cursor-pointer"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* Metric Bar */}
+          <div className="p-4 bg-zinc-900/70 border-b border-[var(--color-outline-variant)] grid grid-cols-2 sm:grid-cols-4 gap-3 text-center font-mono">
+            <div className="bg-[#18181B] p-2.5 rounded border border-amber-500/30">
+              <span className="text-[10px] font-bold uppercase text-amber-400 block font-sans">Still To Take</span>
+              <span className="text-xl font-black text-amber-300 mt-0.5 block">{part.pendingCount}</span>
+            </div>
+
+            <div className="bg-[#18181B] p-2.5 rounded border border-sky-500/30">
+              <span className="text-[10px] font-bold uppercase text-sky-400 block font-sans">In Progress</span>
+              <span className="text-xl font-black text-sky-300 mt-0.5 block">{part.inProgressCount}</span>
+            </div>
+
+            <div className="bg-[#18181B] p-2.5 rounded border border-emerald-500/30">
+              <span className="text-[10px] font-bold uppercase text-emerald-400 block font-sans">Completed</span>
+              <span className="text-xl font-black text-emerald-300 mt-0.5 block">{part.completedCount}</span>
+            </div>
+
+            <div className="bg-[#18181B] p-2.5 rounded border border-zinc-700">
+              <span className="text-[10px] font-bold uppercase text-zinc-400 block font-sans">Total Assigned</span>
+              <span className="text-xl font-black text-white mt-0.5 block">{part.totalAssigned}</span>
+            </div>
+          </div>
+
+          {/* Tab Selection & Search */}
+          <div className="p-3 bg-[#09090B] border-b border-[var(--color-outline-variant)] flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-1 w-full sm:w-auto">
+              <button
+                onClick={() => setParticipationModalTab('pending')}
+                className={`px-3 py-1 rounded-sm text-xs font-bold transition-colors cursor-pointer ${
+                  participationModalTab === 'pending'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                }`}
+              >
+                Still To Take ({part.pendingCount})
+              </button>
+              <button
+                onClick={() => setParticipationModalTab('in_progress')}
+                className={`px-3 py-1 rounded-sm text-xs font-bold transition-colors cursor-pointer ${
+                  participationModalTab === 'in_progress'
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                }`}
+              >
+                In Progress ({part.inProgressCount})
+              </button>
+              <button
+                onClick={() => setParticipationModalTab('completed')}
+                className={`px-3 py-1 rounded-sm text-xs font-bold transition-colors cursor-pointer ${
+                  participationModalTab === 'completed'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                }`}
+              >
+                Completed ({part.completedCount})
+              </button>
+              <button
+                onClick={() => setParticipationModalTab('all')}
+                className={`px-3 py-1 rounded-sm text-xs font-bold transition-colors cursor-pointer ${
+                  participationModalTab === 'all'
+                    ? 'bg-zinc-700 text-white'
+                    : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                }`}
+              >
+                All ({part.totalAssigned})
+              </button>
+            </div>
+
+            <div className="relative w-full sm:w-56">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input
+                type="text"
+                value={participationSearch}
+                onChange={(e) => setParticipationSearch(e.target.value)}
+                placeholder="Search student..."
+                className="w-full pl-8 pr-6 py-1 bg-zinc-900 border border-zinc-700 rounded-sm text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[var(--color-primary)]"
+              />
+              {participationSearch && (
+                <button
+                  onClick={() => setParticipationSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs cursor-pointer"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Student List Table */}
+          <div className="p-4 overflow-y-auto flex-1">
+            {activeList.length === 0 ? (
+              <div className="py-12 text-center text-zinc-500 italic text-xs">
+                No students found in this category.
+              </div>
+            ) : (
+              <div className="border border-zinc-800 rounded-sm overflow-hidden">
+                <table className="w-full text-left text-xs font-medium">
+                  <thead>
+                    <tr className="bg-zinc-900 text-zinc-400 border-b border-zinc-800 uppercase font-bold text-[10px] tracking-wider">
+                      <th className="p-3">Student ID</th>
+                      <th className="p-3">Student Name</th>
+                      <th className="p-3">Email Address</th>
+                      <th className="p-3 text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/60 bg-[#09090B]">
+                    {activeList.map((s) => (
+                      <tr key={s.student_id} className="hover:bg-zinc-900/50 transition-colors">
+                        <td className="p-3 font-mono font-bold text-violet-300">
+                          {s.student_id}
+                        </td>
+                        <td className="p-3 font-bold text-white">
+                          {s.student_name}
+                        </td>
+                        <td className="p-3 text-zinc-400 font-mono text-[11px]">
+                          {s.email || <span className="text-zinc-600 italic">No email on file</span>}
+                        </td>
+                        <td className="p-3 text-right">
+                          {s.status === 'pending' ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                              <Clock size={10} /> Still To Take
+                            </span>
+                          ) : s.status === 'in_progress' ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20 animate-pulse">
+                              <Activity size={10} /> In Progress
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                              <CheckCircle2 size={10} /> Submitted & Graded
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (customModal) {
+          setCustomModal(null);
+        } else if (viewingParticipationTestId) {
+          setViewingParticipationTestId(null);
+          setParticipationSearch('');
+        } else if (manualGradeTarget) {
+          setManualGradeTarget(null);
+        } else if (viewingResponseSessionId) {
+          setViewingResponseSessionId(null);
+          setViewingResponseData(null);
+        } else if (previewTestObj) {
+          setPreviewTestObj(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [customModal, viewingParticipationTestId, manualGradeTarget, viewingResponseSessionId, previewTestObj]);
 
   useEffect(() => {
     triggerMasterRefresh();
@@ -462,38 +874,83 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
     }
   }, [selectedTestId]);
 
-  // Handle Master Test imports (.json drag-and-drop)
-  const handleTestJsonUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
+  // Handle Master Test imports (.json multiple files or single file)
+  const handleTestJsonUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const fileList: File[] = Array.from(files);
+    e.target.value = '';
+
+    const results: { name: string; success: boolean; test_id?: string; count?: number; error?: string }[] = [];
+    const allImportedIds: string[] = [];
+
+    for (const file of fileList) {
       try {
-        const rawText = evt.target?.result as string;
+        const rawText = await file.text();
         const testObj = JSON.parse(rawText);
         const res = await fetch('/api/admin/tests/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ testJson: testObj })
+          body: JSON.stringify({ 
+            testJson: testObj,
+            filename: file.name
+          })
         });
         if (res.ok) {
-          alert('JSON Master blueprint imported successfully!');
-          triggerMasterRefresh();
+          const data = await res.json();
+          const ids = data.imported || [data.test_id];
+          allImportedIds.push(...ids);
+          results.push({ 
+            name: file.name, 
+            success: true, 
+            test_id: ids.join(', '), 
+            count: data.count || 1 
+          });
         } else {
           const rError = await res.json();
-          alert('Import failed: ' + rError.error);
+          results.push({ name: file.name, success: false, error: rError.error || 'Server rejected import' });
         }
       } catch (err: any) {
-        alert('Invalid JSON File structure.');
+        results.push({ name: file.name, success: false, error: err.message || 'Invalid JSON syntax' });
       }
-    };
-    reader.readAsText(file);
+    }
+
+    triggerMasterRefresh();
+    if (allImportedIds.length > 0 && !selectedTestId) {
+      setSelectedTestId(allImportedIds[0]);
+    }
+
+    const successful = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+
+    if (failed.length === 0) {
+      triggerSuccess(
+        'Import Completed',
+        `Successfully imported ${successful.length} file(s) (${allImportedIds.length} test blueprint(s)):\n` +
+        successful.map(s => `• ${s.name} → Test ID: ${s.test_id}`).join('\n')
+      );
+    } else if (successful.length === 0) {
+      triggerAlert(
+        'Import Failed',
+        `Failed to import ${failed.length} file(s):\n` +
+        failed.map(f => `• ${f.name}: ${f.error}`).join('\n')
+      );
+    } else {
+      triggerAlert(
+        'Import Completed with Issues',
+        `Successfully imported ${successful.length} file(s):\n` +
+        successful.map(s => `• ${s.name} → Test ID: ${s.test_id}`).join('\n') +
+        `\n\nFailed to import (${failed.length}):\n` +
+        failed.map(f => `• ${f.name}: ${f.error}`).join('\n')
+      );
+    }
   };
 
   // Handle Roster CSV uploads
   const handleRosterCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const inputElement = e.target;
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
@@ -513,6 +970,8 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
         }
       } catch (err) {
         alert('CSV formatting error.');
+      } finally {
+        inputElement.value = '';
       }
     };
     reader.readAsText(file);
@@ -585,6 +1044,187 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
           }
         } catch (e) {
           triggerAlert('Network Error', 'Error deleting blueprint file.');
+        }
+      }
+    );
+  };
+
+  // Toggle individual test active status (open/closed for students)
+  const handleToggleTestActive = async (testId: string, currentActive: boolean) => {
+    const targetActive = !currentActive;
+    // Optimistic state update
+    setTests(prev => prev.map(t => t.test_id === testId ? { ...t, active: targetActive } : t));
+    if (activeTestDetail && activeTestDetail.test_id === testId) {
+      setActiveTestDetail(prev => prev ? { ...prev, active: targetActive } : null);
+    }
+    try {
+      const res = await fetch(`/api/admin/tests/${testId}/active`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: targetActive })
+      });
+      if (res.ok) {
+        fetchTests();
+        fetchMetadata();
+      } else {
+        const err = await res.json();
+        triggerAlert('Update Error', err.error || 'Failed to update test active status');
+        fetchTests();
+      }
+    } catch (e: any) {
+      triggerAlert('Network Error', e.message || 'Error communicating with server');
+      fetchTests();
+    }
+  };
+
+  // Bulk open (activate) or close all tests
+  const handleBulkOpenAllTests = async (open: boolean = true) => {
+    const actionText = open ? 'Open (Activate) All Tests' : 'Close (Deactivate) All Tests';
+    const confirmMessage = open
+      ? `Are you sure you want to OPEN ALL ${tests.length} test blueprint(s)?\n\nAll tests will immediately become active and visible to assigned students in the student portal.`
+      : `Are you sure you want to CLOSE ALL ${tests.length} test blueprint(s)?\n\nAll tests will become inactive and hidden from students until re-opened.`;
+
+    requestConfirm(
+      actionText,
+      confirmMessage,
+      async () => {
+        try {
+          // Optimistic local update
+          setTests(prev => prev.map(t => ({ ...t, active: open })));
+          if (activeTestDetail) {
+            setActiveTestDetail(prev => prev ? { ...prev, active: open } : null);
+          }
+
+          const res = await fetch('/api/admin/tests/bulk-active', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ active: open })
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            triggerSuccess(
+              open ? 'All Tests Opened' : 'All Tests Closed',
+              data.message || `Successfully ${open ? 'opened' : 'closed'} ${data.updated_count} test blueprint(s).`
+            );
+            fetchTests();
+            fetchMetadata();
+          } else {
+            triggerAlert('Bulk Operation Failed', data.error || 'Failed to update tests.');
+            fetchTests();
+          }
+        } catch (e: any) {
+          triggerAlert('Network Error', e.message || 'Error during bulk test activation.');
+          fetchTests();
+        }
+      }
+    );
+  };
+
+  const handleTogglePublishGrades = async (testId: string, currentPublished: boolean) => {
+    try {
+      const res = await fetch(`/api/admin/tests/${testId}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grades_published: !currentPublished })
+      });
+      if (res.ok) {
+        triggerMasterRefresh();
+      }
+    } catch (e) {}
+  };
+
+  // Batch toggle publish status for selected tests
+  const handleBatchTogglePublish = async (publish: boolean) => {
+    if (selectedPublishTestIds.length === 0) {
+      triggerAlert('No Tests Selected', 'Please select at least one test blueprint using the checkboxes before executing batch publishing.');
+      return;
+    }
+
+    const selectedTestsList = tests
+      .filter(t => selectedPublishTestIds.includes(t.test_id))
+      .map(t => `• ${t.event_name || t.test_id} (${t.test_id})`)
+      .join('\n');
+
+    const actionTitle = publish ? 'Publish Official Grades' : 'Unpublish Grades (Hide)';
+    const actionDesc = publish
+      ? `Are you sure you want to PUBLISH official grades for the following ${selectedPublishTestIds.length} test(s)?\n\n${selectedTestsList}\n\nStudents will immediately be able to view their final scores, percentage, and answer breakdown when logging into the student portal.`
+      : `Are you sure you want to UNPUBLISH grades for the following ${selectedPublishTestIds.length} test(s)?\n\n${selectedTestsList}\n\nScores will be hidden from the student portal.`;
+
+    requestConfirm(
+      actionTitle,
+      actionDesc,
+      async () => {
+        setIsBatchPublishing(true);
+        try {
+          const res = await fetch('/api/admin/tests/publish-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              test_ids: selectedPublishTestIds,
+              grades_published: publish
+            })
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            triggerSuccess(
+              'Publish Status Updated',
+              `Successfully ${publish ? 'published' : 'unpublished'} grades for ${data.updated_count} test blueprint(s).`
+            );
+            triggerMasterRefresh();
+          } else {
+            triggerAlert('Batch Operation Failed', data.error || 'Could not update publication state.');
+          }
+        } catch (e: any) {
+          triggerAlert('Network Error', e.message || 'Network communication error during batch publish.');
+        } finally {
+          setIsBatchPublishing(false);
+        }
+      }
+    );
+  };
+
+  // Batch broadcast emails for selected tests
+  const handleBatchMailGrades = async () => {
+    if (selectedPublishTestIds.length === 0) {
+      triggerAlert('No Tests Selected', 'Please select at least one test blueprint using the checkboxes first.');
+      return;
+    }
+
+    const selectedTestsList = tests
+      .filter(t => selectedPublishTestIds.includes(t.test_id))
+      .map(t => `• ${t.event_name || t.test_id} (${t.test_id})`)
+      .join('\n');
+
+    requestConfirm(
+      'Broadcast Scorecards for Selected Tests',
+      `Are you sure you want to broadcast graded scorecard emails for all completed students in the following ${selectedPublishTestIds.length} test(s)?\n\n${selectedTestsList}\n\nEmails will be sent via your configured SMTP channel (or logged in Mock Simulation mode if unconfigured).`,
+      async () => {
+        setIsBatchEmailing(true);
+        try {
+          const res = await fetch('/api/admin/email-results-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ test_ids: selectedPublishTestIds })
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            const simMsg = data.simulatedCount > 0 ? `\n- Generated ${data.simulatedCount} simulated scorecards in queue.` : '';
+            const realMsg = data.successCount > 0 ? `\n- Dispatched ${data.successCount} real emails successfully via SMTP.` : '';
+            const skipMsg = data.skippedCount > 0 ? `\n- Skipped ${data.skippedCount} profiles (unsubmitted sessions or student email missing).` : '';
+            let errMsg = '';
+            if (data.errors && data.errors.length > 0) {
+              errMsg = `\n\nEncountered ${data.errors.length} error(s):\n` + data.errors.slice(0, 5).join('\n') + (data.errors.length > 5 ? `\n...and ${data.errors.length - 5} more.` : '');
+            }
+
+            triggerSuccess('Broadcast Complete', `Scorecard batch delivery finished!${simMsg}${realMsg}${skipMsg}${errMsg}`);
+            fetchOutboundEmails();
+          } else {
+            triggerAlert('Broadcast Failure', data.error || 'Failed to dispatch scorecard batch.');
+          }
+        } catch (e: any) {
+          triggerAlert('Network Error', e.message || 'Network error dispatching scorecard batch.');
+        } finally {
+          setIsBatchEmailing(false);
         }
       }
     );
@@ -989,6 +1629,21 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
               </span>
             )}
           </button>
+
+          <button 
+            onClick={() => { setActiveTab('publish-grades'); }}
+            className={`w-full flex items-center justify-between px-4 py-2.5 rounded-sm font-medium text-sm transition-all border relative ${activeTab === 'publish-grades' ? 'bg-[var(--color-surface-bright)] text-white border-[var(--color-outline)]' : 'border-transparent text-[var(--color-on-surface-variant)] hover:bg-[var(--color-surface-container)] hover:text-white'}`}
+          >
+            <div className="flex items-center gap-3">
+              <Globe size={18} />
+              <span>Publish Grades</span>
+            </div>
+            {tests.filter(t => t.grades_published).length > 0 && (
+              <span className="bg-emerald-500/20 text-emerald-300 font-extrabold text-[10px] px-2 py-0.5 rounded-sm border border-emerald-500/30">
+                {tests.filter(t => t.grades_published).length} Live
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Navigation bottom tier */}
@@ -1015,7 +1670,9 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         <header className="h-[60px] border-b border-[var(--color-outline-variant)] bg-[var(--color-surface)] flex items-center justify-between px-8 select-none shrink-0">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-[var(--color-on-surface)] capitalize">{activeTab} Console</h2>
+            <h2 className="text-sm font-semibold text-[var(--color-on-surface)] capitalize">
+              {activeTab === 'publish-grades' ? 'Publish Grades & Distribution' : `${activeTab} Console`}
+            </h2>
           </div>
 
           <div className="flex items-center gap-4">
@@ -1132,12 +1789,13 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                         <Upload size={16} />
                       </div>
                       <div className="text-left flex-1 min-w-0">
-                        <p className="font-bold text-xs text-[var(--color-on-surface)]">Import Test Master .json</p>
-                        <p className="text-[10px] text-[var(--color-on-surface-variant)] font-normal truncate">Drag/Drop questions structure file</p>
+                        <p className="font-bold text-xs text-[var(--color-on-surface)]">Import Test Master .json (Multiple)</p>
+                        <p className="text-[10px] text-[var(--color-on-surface-variant)] font-normal truncate">Select or drop 1 or more JSON files (IDs from filenames)</p>
                       </div>
                       <input 
                         type="file" 
                         accept=".json" 
+                        multiple
                         onChange={handleTestJsonUpload}
                         className="hidden" 
                       />
@@ -1203,14 +1861,28 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                               <td className="p-4 font-bold text-sm text-[var(--color-on-surface)]">{t.event_name}</td>
                               <td className="p-4 text-center text-[var(--color-on-surface-variant)] font-mono">{t.mc_count} MC / {t.frq_count} FRQ</td>
                               <td className="p-4 text-center">
-                                {t.active ? (
-                                  <span className="bg-green-100 text-green-800 font-extrabold text-[10px] px-2.5 py-0.5 rounded-sm uppercase">Active Broadcast</span>
-                                ) : (
-                                  <span className="bg-gray-100 text-gray-500 font-extrabold text-[10px] px-2.5 py-0.5 rounded-sm uppercase">Hidden</span>
-                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleTestActive(t.test_id, !!t.active)}
+                                  className={`inline-flex items-center gap-1.5 font-extrabold text-[10px] px-2.5 py-1 rounded-sm uppercase transition-all cursor-pointer border ${
+                                    t.active 
+                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-200 hover:bg-emerald-200' 
+                                      : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                                  }`}
+                                  title={t.active ? 'Test is Active (Open to students). Click to close/hide.' : 'Test is Inactive (Hidden). Click to open/activate.'}
+                                >
+                                  <span className={`w-2 h-2 rounded-full ${t.active ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`} />
+                                  {t.active ? 'Open' : 'Closed'}
+                                </button>
                               </td>
                               <td className="p-4 text-right">
                                 <div className="flex justify-end gap-1.5">
+                                  <button
+                                    onClick={() => handleTogglePublishGrades(t.test_id, !!t.grades_published)}
+                                    className={`p-1 px-2.5 rounded-sm font-bold border text-xs flex items-center gap-1 ${t.grades_published ? 'bg-green-100 text-green-800 border-green-200 hover:bg-green-200' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                                  >
+                                    {t.grades_published ? 'Grades Published' : 'Publish Grades'}
+                                  </button>
                                   <button 
                                     onClick={() => { setSelectedTestId(t.test_id); setActiveTab('tests'); }}
                                     className="p-1 px-2.5 bg-[var(--color-primary)]/10 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/20 rounded-sm font-bold"
@@ -1238,112 +1910,235 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
           {/* SECTION 2: TESTS BLUEPRINT MANAGER */}
           {activeTab === 'tests' && (
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-              {/* Left sidebar: choice tests list */}
-              <div className="lg:col-span-1 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-4 shadow-xs space-y-2">
-                <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block p-1">Available Blueprints</span>
-                {tests.map(t => (
-                  <button
-                    key={t.test_id}
-                    onClick={() => setSelectedTestId(t.test_id)}
-                    className={`w-full text-left p-3 rounded-sm flex items-center justify-between transition-all border ${selectedTestId === t.test_id ? 'bg-[#F2EBFF] text-[#21005D] border-[var(--color-primary)] font-bold' : 'bg-transparent text-[var(--color-on-surface)] hover:bg-[var(--color-surface-container)] border-transparent'}`}
+            <div className="space-y-6">
+              {/* Top Action Bar: Header summary + Bulk Open Controls */}
+              <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-4 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-lg bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
+                    <BookOpen size={22} />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-[var(--color-on-surface)] flex items-center gap-2">
+                      Test Blueprint Manager
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        {tests.filter(t => t.active).length} of {tests.length} Active (Open)
+                      </span>
+                    </h2>
+                    <p className="text-xs text-[var(--color-on-surface-variant)]">
+                      Control test visibility for students, edit question banks, adjust timers, and manage answer keys.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                  <label 
+                    className="px-3.5 py-2 bg-[var(--color-primary)] hover:opacity-90 text-white text-xs font-bold rounded-sm flex items-center gap-1.5 shadow-sm transition-all cursor-pointer select-none"
+                    title="Upload one or multiple .json test blueprint files at once (Test IDs will match filenames)"
                   >
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-xs font-bold truncate">{t.test_id}</p>
-                      <p className="text-[11px] text-[var(--color-on-surface-variant)] truncate">{t.event_name}</p>
-                    </div>
-                    <ArrowRight size={14} className="text-[var(--color-primary)] shrink-0 ml-1" />
+                    <Upload size={14} />
+                    <span>Import Tests (.json)</span>
+                    <input 
+                      type="file" 
+                      accept=".json" 
+                      multiple 
+                      onChange={handleTestJsonUpload} 
+                      className="hidden" 
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleBulkOpenAllTests(true)}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-sm flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                    title="Open and activate all test blueprints so they are visible and accessible to students immediately"
+                  >
+                    <CheckCircle2 size={15} /> Bulk Open All Tests
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    onClick={() => handleBulkOpenAllTests(false)}
+                    className="px-3.5 py-2 bg-[var(--color-surface-bright)] hover:bg-[var(--color-surface-container)] text-[var(--color-on-surface)] border border-[var(--color-outline-variant)] text-xs font-bold rounded-sm flex items-center gap-1.5 transition-all cursor-pointer"
+                    title="Close/deactivate all test blueprints so they are hidden from students"
+                  >
+                    <XCircle size={15} className="text-gray-500" /> Close All Tests
+                  </button>
+                </div>
               </div>
 
-              {/* Center Right workspace column */}
-              <div className="lg:col-span-3 space-y-6">
-                {!selectedTestId ? (
-                  <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] p-12 text-center flex flex-col items-center">
-                    <BookOpen size={48} className="text-neutral-300 mb-3" />
-                    <h3 className="font-bold text-lg">Select a Blueprint file to edit</h3>
-                    <p className="text-xs text-gray-500 mt-1 max-w-sm">Pick a test from the left-hand column to adjust prompts, answer definitions, durations, and points live.</p>
+              {/* Main Grid: Left Blueprint List + Right Workspace */}
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                {/* Left sidebar: choice tests list */}
+                <div className="lg:col-span-1 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-4 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[var(--color-outline-variant)]">
+                    <span className="text-xs font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block">
+                      Available Blueprints ({tests.length})
+                    </span>
+                    <span className="text-[10px] text-gray-500 font-medium">Click box to toggle</span>
                   </div>
-                ) : !activeTestDetail ? (
-                  <div className="bg-[var(--color-surface)] rounded-sm p-6 text-center animate-pulse">Loading core test metadata from host disk...</div>
-                ) : (
-                  <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] overflow-hidden shadow-xs flex flex-col">
-                    {/* Header bar controls */}
-                    <div className="p-6 border-b border-[var(--color-outline-variant)] bg-[var(--color-surface)] flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div>
-                        <span className="font-mono text-xs font-black text-[var(--color-primary)] bg-[var(--color-surface-bright)] px-2 py-0.5 rounded uppercase">Master File: tests/{activeTestDetail.test_id}.json</span>
-                        <h2 className="text-xl font-black mt-1 text-[var(--color-on-surface)]">{activeTestDetail.event_name}</h2>
-                      </div>
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={handleRegradeSubmissions}
-                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-sm flex items-center gap-1.5 shadow-sm transition-all"
-                          title="Recalculate multiple-choice scores for completed submissions based on current key definitions"
-                        >
-                          <RefreshCw size={14} /> Regrade MC Submissions
-                        </button>
-                        <button 
-                          onClick={handleMailBulkGrades}
-                          className="px-4 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-on-primary-container)] text-white text-xs font-bold rounded-sm flex items-center gap-1.5 shadow-sm transition-all"
-                          title="Broadcast graded PDF scorecard diagnostic reports over email to all assigned students"
-                        >
-                          <Mail size={14} /> Email Scorecards
-                        </button>
-                        <button 
-                          onClick={() => {
-                            setPreviewTestObj(activeTestDetail);
-                            setPreviewCurQ(0);
-                          }}
-                          className="px-4 py-2 border border-[var(--color-outline-variant)] hover:bg-[var(--color-surface-container)] text-xs font-bold rounded-sm transition-all"
-                        >
-                          Preview as Student
-                        </button>
-                        <button 
-                          onClick={handleUpdateTestDetail}
-                          className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-sm flex items-center gap-1 shadow-sm transition-all"
-                        >
-                          <Save size={14} /> Write Changes
-                        </button>
-                      </div>
+
+                  <div className="space-y-2">
+                    {tests.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-gray-400">No test blueprints found.</div>
+                    ) : (
+                      tests.map(t => {
+                        const isSelected = selectedTestId === t.test_id;
+                        return (
+                          <div
+                            key={t.test_id}
+                            className={`w-full p-2.5 rounded-sm flex items-center justify-between gap-2.5 transition-all border ${
+                              isSelected 
+                                ? 'bg-[#F2EBFF] text-[#21005D] border-[var(--color-primary)] font-bold shadow-xs' 
+                                : 'bg-transparent text-[var(--color-on-surface)] hover:bg-[var(--color-surface-container)] border-[var(--color-outline-variant)]/70'
+                            }`}
+                          >
+                            {/* Clickbox to determine if test is active/open */}
+                            <label 
+                              className="flex items-center gap-1.5 cursor-pointer select-none shrink-0 py-0.5" 
+                              title={t.active ? 'Active (Open to students). Click to close.' : 'Inactive (Closed to students). Click to open.'}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={!!t.active}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleTestActive(t.test_id, !!t.active);
+                                }}
+                                className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 cursor-pointer"
+                              />
+                              <span className={`text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                                t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'
+                              }`}>
+                                {t.active ? 'Open' : 'Off'}
+                              </span>
+                            </label>
+
+                            {/* Test selector button */}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTestId(t.test_id)}
+                              className="min-w-0 flex-1 text-left flex items-center justify-between gap-1 cursor-pointer"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="font-mono text-xs font-bold truncate">{t.test_id}</p>
+                                <p className="text-[11px] text-[var(--color-on-surface-variant)] truncate">{t.event_name}</p>
+                              </div>
+                              <ArrowRight size={14} className="text-[var(--color-primary)] shrink-0 ml-1" />
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Center Right workspace column */}
+                <div className="lg:col-span-3 space-y-6">
+                  {!selectedTestId ? (
+                    <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] p-12 text-center flex flex-col items-center">
+                      <BookOpen size={48} className="text-neutral-300 mb-3" />
+                      <h3 className="font-bold text-lg">Select a Blueprint file to edit</h3>
+                      <p className="text-xs text-gray-500 mt-1 max-w-sm">Pick a test from the left-hand column to adjust prompts, answer definitions, durations, and points live.</p>
                     </div>
-
-                    {/* Metadata settings card block */}
-                    <div className="p-6 border-b border-solid border-[var(--color-outline-variant)] grid md:grid-cols-4 gap-4 bg-[var(--color-surface-dim)]/50">
-                      <div>
-                        <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Exam Blueprint Name</label>
-                        <input 
-                          type="text" 
-                          value={activeTestDetail.event_name}
-                          onChange={(e) => setActiveTestDetail({ ...activeTestDetail, event_name: e.target.value })}
-                          className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2 font-semibold"
-                        />
-                      </div>
-                      
-                      <div>
-                        <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Timer Duration (Minutes)</label>
-                        <input 
-                          type="number" 
-                          value={activeTestDetail.duration}
-                          onChange={(e) => setActiveTestDetail({ ...activeTestDetail, duration: Number(e.target.value) })}
-                          className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2 font-mono font-bold"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Broadcast Access</label>
-                        <div className="flex items-center gap-1.5 mt-2 select-none">
-                          <input 
-                            type="checkbox" 
-                            id="exam-active-toggle"
-                            checked={activeTestDetail.active}
-                            onChange={(e) => setActiveTestDetail({ ...activeTestDetail, active: e.target.checked })}
-                            className="w-4 h-4 rounded text-[var(--color-primary)]"
-                          />
-                          <label htmlFor="exam-active-toggle" className="text-xs font-bold text-[#21005D]">Visible to Student Menu</label>
+                  ) : !activeTestDetail ? (
+                    <div className="bg-[var(--color-surface)] rounded-sm p-6 text-center animate-pulse">Loading core test metadata from host disk...</div>
+                  ) : (
+                    <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] overflow-hidden shadow-xs flex flex-col">
+                      {/* Header bar controls */}
+                      <div className="p-6 border-b border-[var(--color-outline-variant)] bg-[var(--color-surface)] flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-black text-[var(--color-primary)] bg-[var(--color-surface-bright)] px-2 py-0.5 rounded uppercase">Master File: tests/{activeTestDetail.test_id}.json</span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleTestActive(activeTestDetail.test_id, activeTestDetail.active)}
+                              className={`text-[11px] font-extrabold uppercase px-2.5 py-0.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer border ${
+                                activeTestDetail.active 
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200 hover:bg-emerald-200' 
+                                  : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
+                              }`}
+                              title="Click to toggle test active/open status"
+                            >
+                              <span className={`w-2 h-2 rounded-full ${activeTestDetail.active ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`} />
+                              {activeTestDetail.active ? 'Active (Open to Students)' : 'Inactive (Closed)'}
+                            </button>
+                          </div>
+                          <h2 className="text-xl font-black mt-1 text-[var(--color-on-surface)]">{activeTestDetail.event_name}</h2>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button 
+                            onClick={handleRegradeSubmissions}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-sm flex items-center gap-1.5 shadow-sm transition-all"
+                            title="Recalculate multiple-choice scores for completed submissions based on current key definitions"
+                          >
+                            <RefreshCw size={14} /> Regrade MC Submissions
+                          </button>
+                          <button 
+                            onClick={handleMailBulkGrades}
+                            className="px-4 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-on-primary-container)] text-white text-xs font-bold rounded-sm flex items-center gap-1.5 shadow-sm transition-all"
+                            title="Broadcast graded PDF scorecard diagnostic reports over email to all assigned students"
+                          >
+                            <Mail size={14} /> Email Scorecards
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setPreviewTestObj(activeTestDetail);
+                              setPreviewCurQ(0);
+                            }}
+                            className="px-4 py-2 border border-[var(--color-outline-variant)] hover:bg-[var(--color-surface-container)] text-xs font-bold rounded-sm transition-all"
+                          >
+                            Preview as Student
+                          </button>
+                          <button 
+                            onClick={handleUpdateTestDetail}
+                            className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-sm flex items-center gap-1 shadow-sm transition-all"
+                          >
+                            <Save size={14} /> Write Changes
+                          </button>
                         </div>
                       </div>
-                    </div>
+
+                      {/* Metadata settings card block */}
+                      <div className="p-6 border-b border-solid border-[var(--color-outline-variant)] grid md:grid-cols-4 gap-4 bg-[var(--color-surface-dim)]/50">
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Exam Blueprint Name</label>
+                          <input 
+                            type="text" 
+                            value={activeTestDetail.event_name}
+                            onChange={(e) => setActiveTestDetail({ ...activeTestDetail, event_name: e.target.value })}
+                            className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2 font-semibold"
+                          />
+                        </div>
+                        
+                        <div>
+                          <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Timer Duration (Minutes)</label>
+                          <input 
+                            type="number" 
+                            value={activeTestDetail.duration}
+                            onChange={(e) => setActiveTestDetail({ ...activeTestDetail, duration: Number(e.target.value) })}
+                            className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm px-2.5 py-2 font-mono font-bold"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-widest mb-1.5">Test Availability (Active)</label>
+                          <label className="flex items-center gap-2 mt-1 select-none cursor-pointer p-2 bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm hover:bg-[var(--color-surface-container)] transition-colors">
+                            <input 
+                              type="checkbox" 
+                              id="exam-active-toggle"
+                              checked={activeTestDetail.active}
+                              onChange={(e) => {
+                                const newActive = e.target.checked;
+                                setActiveTestDetail({ ...activeTestDetail, active: newActive });
+                                handleToggleTestActive(activeTestDetail.test_id, !newActive);
+                              }}
+                              className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                            />
+                            <span className={`text-xs font-bold ${activeTestDetail.active ? 'text-emerald-700' : 'text-gray-500'}`}>
+                              {activeTestDetail.active ? 'Open to Students' : 'Closed / Inactive'}
+                            </span>
+                          </label>
+                        </div>
+                      </div>
 
                     {/* Question Customizer Section List */}
                     <div className="p-6 space-y-6">
@@ -1468,21 +2263,17 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                               </div>
 
                               <div className="flex items-center gap-1.5 pt-2 border-t border-[var(--color-outline-variant)]/50 mt-2">
-                                <span className="text-xs font-bold text-[var(--color-on-surface-variant)]">Correct MC Option Indicator:</span>
-                                <select 
-                                  value={q.correct_mc || 'A'}
+                                <span className="text-xs font-bold text-[var(--color-on-surface-variant)]">Correct MC Option Indicator(s) (comma separated):</span>
+                                <input 
+                                  value={q.correct_mc || ''}
                                   onChange={(e) => {
                                     const updated = [...activeTestDetail.questions];
                                     updated[qIdx] = { ...q, correct_mc: e.target.value };
                                     setActiveTestDetail({ ...activeTestDetail, questions: updated });
                                   }}
-                                  className="text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded px-2 py-1 font-mono font-bold"
-                                >
-                                  <option value="A">Choice A</option>
-                                  <option value="B">Choice B</option>
-                                  <option value="C">Choice C</option>
-                                  <option value="D">Choice D</option>
-                                </select>
+                                  placeholder="e.g. A, or A,C"
+                                  className="text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded px-2 py-1 font-mono font-bold w-32"
+                                />
                               </div>
                             </div>
                           )}
@@ -1531,7 +2322,8 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 )}
               </div>
             </div>
-          )}
+          </div>
+        )}
 
           {/* SECTION 3: ROSTER & ASSIGNED MANAGER */}
           {activeTab === 'roster' && (
@@ -1603,7 +2395,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                         <button 
                           onClick={() => {
                             setEditingStudentId(null);
-                            setNewStudentForm({ student_id: '', student_name: '', assigned_str: '' });
+                            setNewStudentForm({ student_id: '', student_name: '', email: '', assigned_str: '' });
                           }}
                           className="px-3 py-2.5 bg-neutral-200 hover:bg-neutral-300 text-neutral-800 rounded-sm text-xs font-bold transition-all"
                         >
@@ -1616,7 +2408,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
                 {/* Bulk assign shortcuts */}
                 <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-5 shadow-xs space-y-3">
-                  <h3 className="font-bold text-xs text-[#21005D] uppercase tracking-wider block">Bulk Assign shortcut</h3>
+                  <h3 className="font-bold text-xs text-purple-400 uppercase tracking-wider block">Bulk Assign shortcut</h3>
                   <p className="text-[10px] text-[var(--color-on-surface-variant)]">Select active test to force-append onto ALL registered students profiles at once:</p>
                   
                   <select 
@@ -1676,6 +2468,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                       <tr className="bg-[var(--color-surface-dim)] text-[var(--color-on-surface-variant)] border-b border-solid border-[var(--color-outline-variant)] uppercase font-bold tracking-wider">
                         <th className="p-4">Student ID</th>
                         <th className="p-4">Student Name</th>
+                        <th className="p-4">Student Email</th>
                         <th className="p-4">Assigned Test Blueprints</th>
                         <th className="p-4 text-right">Settings</th>
                       </tr>
@@ -1683,7 +2476,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                     <tbody className="divide-y divide-dashed divide-[var(--color-outline-variant)]">
                       {roster.students.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="text-center p-10 text-gray-400">
+                          <td colSpan={5} className="text-center p-10 text-gray-400">
                             No students registered. Type a profile on the left or drop a Roster CSV onto the dashboard.
                           </td>
                         </tr>
@@ -1693,17 +2486,19 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                             <td className="p-4 font-mono font-extrabold text-[var(--color-primary)] select-all uppercase">{s.student_id}</td>
                             <td className="p-4">
                               <div className="font-bold text-[var(--color-on-surface)] text-sm">{s.student_name}</div>
+                            </td>
+                            <td className="p-4">
                               {s.email ? (
-                                <div className="text-[10px] font-mono text-neutral-500 mt-0.5">{s.email}</div>
+                                <div className="text-[10px] font-mono text-neutral-500">{s.email}</div>
                               ) : (
-                                <div className="text-[10px] text-rose-500 italic mt-0.5">No email address</div>
+                                <div className="text-[10px] text-rose-500 italic">No email address</div>
                               )}
                             </td>
                             <td className="p-4">
                               <div className="flex flex-wrap gap-1">
                                 {s.assigned_tests && s.assigned_tests.length > 0 ? (
                                   s.assigned_tests.map((at) => (
-                                    <span key={at} className="bg-[var(--color-surface-bright)] text-[#21005D] text-[10px] font-bold px-2 py-0.5 rounded font-mono border border-[var(--color-outline-variant)]">
+                                    <span key={at} className="bg-purple-950/80 text-[#D8B4FE] border border-purple-500/60 text-[11px] font-bold px-2.5 py-0.5 rounded-sm font-mono shadow-xs">
                                       {at}
                                     </span>
                                   ))
@@ -2115,6 +2910,105 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 </div>
 
                 <div className="space-y-6">
+                  {/* Student Participation & Remaining Test Takers Section */}
+                  <div className="bg-[var(--color-surface-dim)] border border-[var(--color-outline-variant)] rounded-sm p-6 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[var(--color-outline-variant)] pb-3">
+                      <div>
+                        <h3 className="text-sm font-black text-[var(--color-on-surface)] uppercase tracking-wider flex items-center gap-2">
+                          <Users size={16} className="text-[var(--color-primary)]" />
+                          Exam Participation & Student Test Status
+                        </h3>
+                        <p className="text-xs text-[var(--color-on-surface-variant)] mt-0.5">
+                          Monitor completion rates and see how many students still have to take each exam.
+                        </p>
+                      </div>
+                      <span className="text-[11px] font-mono font-bold text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded border border-amber-500/20 self-start sm:self-auto">
+                        Total Pending Across Exams: {tests.reduce((acc, t) => acc + getTestParticipation(t.test_id, t.event_name).pendingCount, 0)} student(s)
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {tests.length === 0 ? (
+                        <div className="col-span-full py-8 text-center text-zinc-500 text-xs italic">
+                          No test blueprints loaded.
+                        </div>
+                      ) : (
+                        tests.map((t) => {
+                          const part = getTestParticipation(t.test_id, t.event_name);
+                          const percentDone = part.totalAssigned > 0 ? Math.round((part.completedCount / part.totalAssigned) * 100) : 0;
+
+                          return (
+                            <div key={t.test_id} className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-4 space-y-3 shadow-xs hover:border-zinc-700 transition-colors">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <span className="font-mono text-[10px] font-bold text-[var(--color-primary)] bg-black/30 px-1.5 py-0.5 rounded border border-zinc-700">
+                                    {t.test_id}
+                                  </span>
+                                  <h4 className="font-bold text-sm text-[var(--color-on-surface)] mt-1">{t.event_name || 'Untitled Exam'}</h4>
+                                </div>
+                                {part.pendingCount > 0 ? (
+                                  <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] font-bold px-2 py-0.5 rounded-sm shrink-0 font-mono">
+                                    {part.pendingCount} Still To Take
+                                  </span>
+                                ) : part.totalAssigned > 0 ? (
+                                  <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold px-2 py-0.5 rounded-sm shrink-0 font-medium">
+                                    ✓ All {part.totalAssigned} Taken
+                                  </span>
+                                ) : (
+                                  <span className="bg-zinc-800 text-zinc-400 border border-zinc-700 text-[10px] font-bold px-2 py-0.5 rounded-sm shrink-0">
+                                    0 Roster Assigned
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Progress bar */}
+                              <div className="space-y-1">
+                                <div className="flex justify-between text-[11px] font-mono text-[var(--color-on-surface-variant)]">
+                                  <span>{part.completedCount} / {part.totalAssigned} Completed ({percentDone}%)</span>
+                                  {part.inProgressCount > 0 && (
+                                    <span className="text-sky-400 font-bold">{part.inProgressCount} Active</span>
+                                  )}
+                                </div>
+                                <div className="w-full h-2 bg-zinc-800 rounded-full overflow-hidden flex">
+                                  <div style={{ width: `${percentDone}%` }} className="bg-emerald-500 h-full transition-all" />
+                                  {part.totalAssigned > 0 && part.inProgressCount > 0 && (
+                                    <div style={{ width: `${Math.round((part.inProgressCount / part.totalAssigned) * 100)}%` }} className="bg-sky-500 h-full transition-all animate-pulse" />
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* KPI Badges row */}
+                              <div className="grid grid-cols-3 gap-1.5 pt-1 text-center font-mono">
+                                <div className="bg-emerald-950/20 border border-emerald-500/20 p-1.5 rounded">
+                                  <span className="text-[9px] text-emerald-400 block font-sans uppercase font-bold">Done</span>
+                                  <span className="text-xs font-bold text-white">{part.completedCount}</span>
+                                </div>
+                                <div className="bg-sky-950/20 border border-sky-500/20 p-1.5 rounded">
+                                  <span className="text-[9px] text-sky-400 block font-sans uppercase font-bold">Active</span>
+                                  <span className="text-xs font-bold text-white">{part.inProgressCount}</span>
+                                </div>
+                                <div className="bg-amber-950/20 border border-amber-500/20 p-1.5 rounded">
+                                  <span className="text-[9px] text-amber-400 block font-sans uppercase font-bold">Still To Take</span>
+                                  <span className="text-xs font-bold text-amber-300">{part.pendingCount}</span>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={() => {
+                                  setViewingParticipationTestId(t.test_id);
+                                  setParticipationModalTab('pending');
+                                }}
+                                className="w-full py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-sm text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer border border-zinc-700"
+                              >
+                                <Eye size={12} /> Inspect Roster ({part.pendingCount} Pending)
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
                   {/* AI Autograding Control Deck */}
                   <div className="bg-[var(--color-surface-dim)] border border-[var(--color-outline-variant)] rounded-sm p-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-surface-dim)] rounded-sm blur-3xl opacity-50 -mr-6 -mt-6"></div>
@@ -2242,6 +3136,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                               <th className="p-3">Exam / Prompt</th>
                               <th className="p-3">Syllable Word Counts</th>
                               <th className="p-3 text-right">Estimated Footprint</th>
+                              <th className="p-3 text-right">Action</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-solid divide-[var(--color-outline-variant)] font-medium">
@@ -2269,6 +3164,18 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                                   </td>
                                   <td className="p-3 text-right font-mono text-xs font-black text-amber-700">
                                     ~{estimatedTokens.toLocaleString()} <span className="text-[10px] font-bold text-gray-400 font-sans">tokens</span>
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    <button
+                                      onClick={() => {
+                                        setManualGradeTarget(item);
+                                        setManualGradeScore('');
+                                        setManualGradeNotes('');
+                                      }}
+                                      className="px-2 py-1 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-sm text-[10px] uppercase shadow-sm"
+                                    >
+                                      Grade
+                                    </button>
                                   </td>
                                 </tr>
                               );
@@ -2375,7 +3282,918 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             </div>
           )}
 
-          {/* SECTION 6: SYSTEM SETTINGS (BACKUP, PASSWORDS ETC.) */}
+          {/* SECTION 6: PUBLISH GRADES & TESTING ANALYTICS CONSOLE */}
+          {activeTab === 'publish-grades' && (() => {
+            const filteredPublishTests = tests.filter(t => {
+              const query = publishSearchQuery.trim().toLowerCase();
+              const matchesSearch = !query || 
+                (t.event_name || '').toLowerCase().includes(query) ||
+                (t.test_id || '').toLowerCase().includes(query);
+              
+              if (!matchesSearch) return false;
+              if (publishStatusFilter === 'published') return !!t.grades_published;
+              if (publishStatusFilter === 'unpublished') return !t.grades_published;
+              return true;
+            });
+
+            const publishedCount = tests.filter(t => t.grades_published).length;
+            const unpublishedCount = tests.length - publishedCount;
+
+            const isAllVisibleSelected = filteredPublishTests.length > 0 && 
+              filteredPublishTests.every(t => selectedPublishTestIds.includes(t.test_id));
+
+            const toggleSelectAll = () => {
+              if (isAllVisibleSelected) {
+                const filteredIds = new Set(filteredPublishTests.map(t => t.test_id));
+                setSelectedPublishTestIds(prev => prev.filter(id => !filteredIds.has(id)));
+              } else {
+                const newIds = new Set([...selectedPublishTestIds, ...filteredPublishTests.map(t => t.test_id)]);
+                setSelectedPublishTestIds(Array.from(newIds));
+              }
+            };
+
+            const toggleSelectTest = (testId: string) => {
+              setSelectedPublishTestIds(prev => 
+                prev.includes(testId) ? prev.filter(id => id !== testId) : [...prev, testId]
+              );
+            };
+
+            // Filter question analytics for current analyticsTestId
+            const filteredQuestionAnalytics = (analyticsData?.question_analytics || []).filter((q: any) => {
+              const qSearch = analyticsSearchQuery.trim().toLowerCase();
+              const matchesSearch = !qSearch || 
+                (q.prompt || '').toLowerCase().includes(qSearch) ||
+                `q${q.question_number}`.includes(qSearch) ||
+                (q.question_id || '').toLowerCase().includes(qSearch);
+
+              if (!matchesSearch) return false;
+              if (analyticsTypeFilter === 'MC' && q.type !== 'MC') return false;
+              if (analyticsTypeFilter === 'FRQ' && q.type === 'MC') return false;
+              if (analyticsDifficultyFilter !== 'all' && q.difficulty_rating !== analyticsDifficultyFilter) return false;
+
+              return true;
+            });
+
+            return (
+              <div className="space-y-6 pb-12">
+                {/* Header Context Banner & Sub-tab Switcher */}
+                <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-6 shadow-xs space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <Globe className="text-[var(--color-primary)]" size={20} />
+                        <h3 className="font-extrabold text-base text-[var(--color-on-surface)] tracking-tight">
+                          Publish Grades & Testing Analytics
+                        </h3>
+                      </div>
+                      <p className="text-xs text-[var(--color-on-surface-variant)] max-w-2xl leading-relaxed">
+                        Control student visibility of scores and inspect deep question-level testing analytics, item difficulty, and option response distributions across exams as a whole.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={triggerMasterRefresh}
+                        className="px-3 py-1.5 bg-[var(--color-surface-container)] hover:bg-[var(--color-surface-bright)] text-[var(--color-on-surface)] text-xs font-semibold rounded-sm border border-[var(--color-outline-variant)] flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <RefreshCw size={13} /> Refresh Data
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Sub-tab Navigation Pills */}
+                  <div className="flex items-center gap-2 pt-2 border-t border-[var(--color-outline-variant)]">
+                    <button
+                      onClick={() => setPublishSubTab('checklist')}
+                      className={`px-4 py-2 rounded-sm text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                        publishSubTab === 'checklist'
+                          ? 'bg-[var(--color-primary)] text-white shadow-xs'
+                          : 'bg-[var(--color-surface-container)] text-[var(--color-on-surface-variant)] hover:text-white'
+                      }`}
+                    >
+                      <Globe size={14} />
+                      <span>Publishing Checklist ({tests.length})</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setPublishSubTab('analytics');
+                        if (!analyticsTestId && tests.length > 0) {
+                          const firstId = tests[0].test_id;
+                          setAnalyticsTestId(firstId);
+                          fetchTestAnalytics(firstId);
+                        }
+                      }}
+                      className={`px-4 py-2 rounded-sm text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                        publishSubTab === 'analytics'
+                          ? 'bg-[var(--color-primary)] text-white shadow-xs'
+                          : 'bg-[var(--color-surface-container)] text-[var(--color-on-surface-variant)] hover:text-white'
+                      }`}
+                    >
+                      <BarChart size={14} />
+                      <span>Testing Analytics & Question Breakdown</span>
+                    </button>
+                  </div>
+                </div>
+
+                {publishSubTab === 'checklist' ? (
+                  <>
+                    {/* KPI Metrics Row */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                        <span className="text-[11px] font-bold text-[var(--color-on-surface-variant)] uppercase tracking-wider block">
+                          Total Test Blueprints
+                        </span>
+                        <div className="flex items-baseline gap-2 mt-2">
+                          <span className="text-3xl font-extrabold text-[var(--color-on-surface)]">{tests.length}</span>
+                          <span className="text-[10px] text-[var(--color-on-surface-variant)]">active exams</span>
+                        </div>
+                      </div>
+
+                      <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider block">
+                            Published (Live)
+                          </span>
+                          <CheckCircle2 size={16} className="text-emerald-400" />
+                        </div>
+                        <div className="flex items-baseline gap-2 mt-2">
+                          <span className="text-3xl font-extrabold text-emerald-400">{publishedCount}</span>
+                          <span className="text-[10px] text-emerald-400/80">visible to students</span>
+                        </div>
+                      </div>
+
+                      <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block">
+                            Hidden (Unpublished)
+                          </span>
+                          <Lock size={16} className="text-amber-400" />
+                        </div>
+                        <div className="flex items-baseline gap-2 mt-2">
+                          <span className="text-3xl font-extrabold text-amber-400">{unpublishedCount}</span>
+                          <span className="text-[10px] text-amber-400/80">draft / protected</span>
+                        </div>
+                      </div>
+
+                      <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                        <span className="text-[11px] font-bold text-[var(--color-primary)] uppercase tracking-wider block">
+                          Graded Submissions
+                        </span>
+                        <div className="flex items-baseline gap-2 mt-2">
+                          <span className="text-3xl font-extrabold text-[var(--color-primary)]">{gradingResults.length}</span>
+                          <span className="text-[10px] text-[var(--color-on-surface-variant)]">student records</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action & Filter Toolbar */}
+                    <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-4 space-y-4">
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        {/* Search and Filters */}
+                        <div className="flex flex-wrap items-center gap-2 flex-1">
+                          <div className="relative flex-1 min-w-[200px] max-w-md">
+                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-on-surface-variant)]" />
+                            <input
+                              type="text"
+                              value={publishSearchQuery}
+                              onChange={(e) => setPublishSearchQuery(e.target.value)}
+                              placeholder="Search tests by title or ID..."
+                              className="w-full pl-9 pr-3 py-1.5 bg-[var(--color-surface-container)] border border-[var(--color-outline-variant)] rounded-sm text-xs text-[var(--color-on-surface)] focus:border-[var(--color-primary)] focus:outline-none"
+                            />
+                            {publishSearchQuery && (
+                              <button
+                                onClick={() => setPublishSearchQuery('')}
+                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-xs"
+                              >
+                                ×
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1 bg-[var(--color-surface-container)] p-1 rounded-sm border border-[var(--color-outline-variant)] text-xs">
+                            <button
+                              onClick={() => setPublishStatusFilter('all')}
+                              className={`px-2.5 py-1 rounded-sm font-semibold transition-colors ${
+                                publishStatusFilter === 'all'
+                                  ? 'bg-[var(--color-primary)] text-white'
+                                  : 'text-[var(--color-on-surface-variant)] hover:text-white'
+                              }`}
+                            >
+                              All ({tests.length})
+                            </button>
+                            <button
+                              onClick={() => setPublishStatusFilter('published')}
+                              className={`px-2.5 py-1 rounded-sm font-semibold transition-colors ${
+                                publishStatusFilter === 'published'
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'text-[var(--color-on-surface-variant)] hover:text-white'
+                              }`}
+                            >
+                              Published ({publishedCount})
+                            </button>
+                            <button
+                              onClick={() => setPublishStatusFilter('unpublished')}
+                              className={`px-2.5 py-1 rounded-sm font-semibold transition-colors ${
+                                publishStatusFilter === 'unpublished'
+                                  ? 'bg-amber-600 text-white'
+                                  : 'text-[var(--color-on-surface-variant)] hover:text-white'
+                              }`}
+                            >
+                              Unpublished ({unpublishedCount})
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Quick Selection Helpers */}
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={toggleSelectAll}
+                            className="px-2.5 py-1.5 bg-[var(--color-surface-container)] hover:bg-[var(--color-surface-bright)] text-xs font-semibold rounded-sm border border-[var(--color-outline-variant)] text-[var(--color-on-surface)] flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            {isAllVisibleSelected ? <CheckSquare size={14} className="text-[var(--color-primary)]" /> : <Square size={14} />}
+                            <span>{isAllVisibleSelected ? 'Deselect Visible' : 'Select All Visible'}</span>
+                          </button>
+                          {selectedPublishTestIds.length > 0 && (
+                            <button
+                              onClick={() => setSelectedPublishTestIds([])}
+                              className="px-2.5 py-1.5 text-xs text-gray-400 hover:text-white hover:underline transition-colors cursor-pointer"
+                            >
+                              Clear Selection
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Batch Action Confirmation Bar */}
+                      <div className={`p-3 rounded-sm border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                        selectedPublishTestIds.length > 0
+                          ? 'bg-[var(--color-surface-bright)] border-[var(--color-outline)] shadow-xs'
+                          : 'bg-[var(--color-surface-container)]/50 border-[var(--color-outline-variant)]/50 opacity-60'
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${selectedPublishTestIds.length > 0 ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`}></span>
+                          <span className="text-xs font-bold text-[var(--color-on-surface)]">
+                            {selectedPublishTestIds.length === 0
+                              ? 'No tests selected. Check test boxes below to perform selective batch actions.'
+                              : `${selectedPublishTestIds.length} test blueprint(s) selected for action:`}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            onClick={() => handleBatchTogglePublish(true)}
+                            disabled={selectedPublishTestIds.length === 0 || isBatchPublishing}
+                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold rounded-sm inline-flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+                            title="Publish official grades for all checked tests"
+                          >
+                            <CheckCircle2 size={13} />
+                            <span>Publish Selected ({selectedPublishTestIds.length})</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleBatchTogglePublish(false)}
+                            disabled={selectedPublishTestIds.length === 0 || isBatchPublishing}
+                            className="px-3.5 py-1.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-40 text-white text-xs font-bold rounded-sm inline-flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+                            title="Hide grades from student portal for checked tests"
+                          >
+                            <Lock size={13} />
+                            <span>Unpublish Selected ({selectedPublishTestIds.length})</span>
+                          </button>
+
+                          <button
+                            onClick={handleBatchMailGrades}
+                            disabled={selectedPublishTestIds.length === 0 || isBatchEmailing}
+                            className="px-3.5 py-1.5 bg-[var(--color-primary)] hover:bg-[#684FA3] disabled:opacity-40 text-white text-xs font-bold rounded-sm inline-flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+                            title="Send graded scorecards via email for checked tests"
+                          >
+                            <Mail size={13} />
+                            <span>Email Scorecards ({selectedPublishTestIds.length})</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Main Tests Selection Table */}
+                    <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm overflow-hidden shadow-xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-[var(--color-outline-variant)] bg-[var(--color-surface-container)] text-[var(--color-on-surface-variant)] uppercase tracking-wider text-[10px] font-bold">
+                              <th className="p-3.5 w-10 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={isAllVisibleSelected}
+                                  onChange={toggleSelectAll}
+                                  className="rounded cursor-pointer accent-[var(--color-primary)]"
+                                />
+                              </th>
+                              <th className="p-3.5">Test / Event Blueprint</th>
+                              <th className="p-3.5">Student Visibility</th>
+                              <th className="p-3.5">Submission & FRQ Status</th>
+                              <th className="p-3.5">Average Performance</th>
+                              <th className="p-3.5 text-right">Individual Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[var(--color-outline-variant)]">
+                            {filteredPublishTests.length === 0 ? (
+                              <tr>
+                                <td colSpan={6} className="p-8 text-center text-[var(--color-on-surface-variant)] italic">
+                                  No test blueprints match your current filter query.
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredPublishTests.map((t) => {
+                                const isSelected = selectedPublishTestIds.includes(t.test_id);
+                                const isPublished = !!t.grades_published;
+
+                                const testResults = gradingResults.filter(r => r.test_id === t.test_id);
+                                const testAllFrqs = gradingQueue.filter(q => q.test_id === t.test_id);
+                                const testPendingFrqs = testAllFrqs.filter(q => !q.grade);
+                                const testGradedFrqs = testAllFrqs.filter(q => !!q.grade);
+                                const part = getTestParticipation(t.test_id, t.event_name);
+                                
+                                let avgScoreStr = '--';
+                                if (testResults.length > 0) {
+                                  const sumScores = testResults.reduce((acc, r) => acc + (Number(r.total_score) || 0), 0);
+                                  const avg = (sumScores / testResults.length).toFixed(1);
+                                  const maxPts = t.questions ? t.questions.reduce((acc: number, q: any) => acc + (Number(q.points) || 1), 0) : 0;
+                                  avgScoreStr = `${avg} / ${maxPts} pts (${maxPts > 0 ? Math.round((Number(avg) / maxPts) * 100) : 0}%)`;
+                                }
+
+                                return (
+                                  <tr 
+                                    key={t.test_id}
+                                    className={`hover:bg-[var(--color-surface-bright)]/40 transition-colors ${
+                                      isSelected ? 'bg-[var(--color-surface-bright)]/60' : ''
+                                    }`}
+                                  >
+                                    <td className="p-3.5 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={() => toggleSelectTest(t.test_id)}
+                                        className="rounded cursor-pointer accent-[var(--color-primary)]"
+                                      />
+                                    </td>
+
+                                    <td className="p-3.5">
+                                      <div className="font-bold text-white text-sm">{t.event_name || 'Untitled Event'}</div>
+                                      <div className="flex items-center gap-2 mt-0.5 text-[11px] text-[var(--color-on-surface-variant)]">
+                                        <span className="font-mono bg-black/30 px-1.5 py-0.5 rounded text-[10px] text-zinc-300 font-bold border border-zinc-700">
+                                          {t.test_id}
+                                        </span>
+                                        <span>•</span>
+                                        <span>{t.questions?.length || 0} questions</span>
+                                        <span>•</span>
+                                        <span>{t.duration || 30} mins</span>
+                                      </div>
+                                    </td>
+
+                                    <td className="p-3.5">
+                                      {isPublished ? (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold">
+                                          <CheckCircle2 size={12} className="text-emerald-400" />
+                                          Published Live
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-zinc-800 text-zinc-400 border border-zinc-700 text-[11px] font-bold">
+                                          <Lock size={12} className="text-zinc-500" />
+                                          Hidden / Draft
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    <td className="p-3.5">
+                                      <div className="space-y-1">
+                                        <div className="font-medium text-[var(--color-on-surface)]">
+                                          {testResults.length} / {part.totalAssigned} submitted
+                                        </div>
+                                        {part.pendingCount > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setViewingParticipationTestId(t.test_id);
+                                              setParticipationModalTab('pending');
+                                            }}
+                                            className="inline-flex items-center gap-1 text-[10px] text-amber-400 font-bold bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/20 transition-colors cursor-pointer text-left font-mono my-0.5"
+                                            title="Click to view students who still need to take this exam"
+                                          >
+                                            <Clock size={10} />
+                                            {part.pendingCount} student(s) still to take
+                                          </button>
+                                        )}
+                                        {testAllFrqs.length > 0 ? (
+                                          testPendingFrqs.length > 0 ? (
+                                            <span className="inline-flex items-center gap-1 text-[10px] text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                              <AlertCircle size={10} />
+                                              {testPendingFrqs.length} FRQ(s) need grading ({testGradedFrqs.length}/{testAllFrqs.length} graded)
+                                            </span>
+                                          ) : (
+                                            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                                              <CheckCircle2 size={10} />
+                                              All {testAllFrqs.length} FRQ(s) graded (Ready for release)
+                                            </span>
+                                          )
+                                        ) : testResults.length > 0 ? (
+                                          <span className="text-[10px] text-emerald-400/90 font-medium">
+                                            ✓ Ready for release
+                                          </span>
+                                        ) : (
+                                          <span className="text-[10px] text-zinc-500 italic">
+                                            No active submissions
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    <td className="p-3.5">
+                                      <span className="font-mono text-zinc-300">{avgScoreStr}</span>
+                                    </td>
+
+                                    <td className="p-3.5 text-right">
+                                      <div className="flex items-center justify-end gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setAnalyticsTestId(t.test_id);
+                                            setPublishSubTab('analytics');
+                                            fetchTestAnalytics(t.test_id);
+                                          }}
+                                          className="px-2.5 py-1.5 rounded-sm font-bold text-xs bg-purple-900/40 hover:bg-purple-800/60 text-purple-200 border border-purple-500/40 transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                                          title="Inspect question-by-question response breakdown and option analytics"
+                                        >
+                                          <BarChart size={12} />
+                                          Analytics
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            requestConfirm(
+                                              isPublished ? 'Unpublish Test Grades' : 'Publish Test Grades',
+                                              isPublished
+                                                ? `Are you sure you want to unpublish grades for "${t.event_name}" (${t.test_id})? Students will no longer see score details.`
+                                                : `Are you sure you want to publish grades for "${t.event_name}" (${t.test_id})? Students who took this test will immediately be able to view their final scores in the student portal.`,
+                                              () => handleTogglePublishGrades(t.test_id, isPublished)
+                                            );
+                                          }}
+                                          className={`px-2.5 py-1.5 rounded-sm font-bold text-xs border transition-all inline-flex items-center gap-1.5 cursor-pointer ${
+                                            isPublished
+                                              ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900/60'
+                                              : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700 hover:text-white'
+                                          }`}
+                                        >
+                                          {isPublished ? <CheckCircle2 size={12} /> : <Lock size={12} />}
+                                          {isPublished ? 'Published (Toggle)' : 'Publish Grade'}
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveTestDetail(t);
+                                            handleMailBulkGrades();
+                                          }}
+                                          className="px-2.5 py-1.5 rounded-sm font-bold text-xs bg-[var(--color-surface-container)] hover:bg-[var(--color-surface-bright)] text-[var(--color-on-surface)] border border-[var(--color-outline-variant)] transition-all inline-flex items-center gap-1.5 cursor-pointer"
+                                          title="Broadcast scorecard reports for this specific test"
+                                        >
+                                          <Mail size={12} />
+                                          Email
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Explanatory Safety & Best Practices Card */}
+                    <div className="bg-[var(--color-surface-container)] border border-[var(--color-outline-variant)] rounded-sm p-5 space-y-3">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--color-on-surface)] flex items-center gap-1.5">
+                        <ShieldCheck size={16} className="text-emerald-400" />
+                        Publishing Safety & Access Rules
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
+                        <div className="space-y-1.5 border-l-2 border-emerald-500 pl-3">
+                          <div className="font-bold text-white">Student Portal Scorecard Reveal</div>
+                          <p>
+                            When a test is marked <strong>Published</strong>, any student assigned to that test who has submitted their work can immediately view their final score, question rubric, and qualitative feedback when logging into their student portal.
+                          </p>
+                        </div>
+
+                        <div className="space-y-1.5 border-l-2 border-amber-500 pl-3">
+                          <div className="font-bold text-white">Selective Push Prevention</div>
+                          <p>
+                            Unpublished tests remain strictly confidential. If an exam is still in progress or contains un-graded free-response questions, keep it unpublished to prevent premature score disclosures.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  /* ========================================================= */
+                  /* SUB-TAB 2: QUESTION-LEVEL TESTING ANALYTICS DASHBOARD     */
+                  /* ========================================================= */
+                  <div className="space-y-6">
+                    {/* Test Selection Header Bar */}
+                    <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="flex-1 space-y-1">
+                        <label className="text-[11px] font-bold text-purple-400 uppercase tracking-wider block font-mono">
+                          Select Test Blueprint for Item Analysis:
+                        </label>
+                        <select
+                          value={analyticsTestId}
+                          onChange={(e) => {
+                            const newId = e.target.value;
+                            setAnalyticsTestId(newId);
+                            fetchTestAnalytics(newId);
+                          }}
+                          className="w-full max-w-xl text-sm font-bold bg-[var(--color-surface-container)] border border-[var(--color-outline-variant)] rounded-sm px-3 py-2 text-[var(--color-on-surface)] focus:border-[var(--color-primary)] focus:outline-none"
+                        >
+                          {tests.map((t) => (
+                            <option key={t.test_id} value={t.test_id}>
+                              {t.event_name || 'Untitled Event'} ({t.test_id}) — {t.questions?.length || 0} Questions
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => fetchTestAnalytics(analyticsTestId)}
+                          disabled={isLoadingAnalytics}
+                          className="px-3.5 py-2 bg-[var(--color-surface-container)] hover:bg-[var(--color-surface-bright)] text-[var(--color-on-surface)] text-xs font-bold rounded-sm border border-[var(--color-outline-variant)] flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <RefreshCw size={14} className={isLoadingAnalytics ? 'animate-spin' : ''} />
+                          <span>Re-analyze</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {isLoadingAnalytics ? (
+                      <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-12 text-center space-y-3">
+                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-3 border-purple-500 border-t-transparent"></div>
+                        <p className="text-sm font-bold text-gray-300">Computing question-by-question item analysis...</p>
+                        <p className="text-xs text-gray-500">Aggregating MCQ choice distributions and FRQ score patterns from student submission files.</p>
+                      </div>
+                    ) : !analyticsData ? (
+                      <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-12 text-center text-gray-400">
+                        <AlertCircle size={32} className="mx-auto mb-3 text-amber-400" />
+                        <p className="text-sm font-bold">No submissions or analytical records found for this test.</p>
+                        <p className="text-xs text-gray-500 mt-1">Once students submit tests or simulations run, question performance data will automatically appear here.</p>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Summary Metrics KPI Grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                              Average Class Score
+                            </span>
+                            <div className="flex items-baseline gap-2 mt-1">
+                              <span className="text-2xl font-black text-white">{analyticsData.average_score}</span>
+                              <span className="text-xs text-gray-400 font-mono">/ {analyticsData.total_possible_points} pts</span>
+                            </div>
+                            <div className="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden mt-2">
+                              <div 
+                                className="bg-purple-500 h-full rounded-full" 
+                                style={{ width: `${Math.min(100, Math.round((analyticsData.average_score / (analyticsData.total_possible_points || 1)) * 100))}%` }}
+                              ></div>
+                            </div>
+                            <span className="text-[10px] text-purple-300 font-bold block mt-1">
+                              {Math.round((analyticsData.average_score / (analyticsData.total_possible_points || 1)) * 100)}% Overall Mean
+                            </span>
+                          </div>
+
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                              Median Score
+                            </span>
+                            <div className="flex items-baseline gap-2 mt-1">
+                              <span className="text-2xl font-black text-indigo-300">{analyticsData.median_score}</span>
+                              <span className="text-xs text-gray-400 font-mono">pts</span>
+                            </div>
+                            <span className="text-[10px] text-gray-400 block mt-3">Range: {analyticsData.lowest_score} - {analyticsData.highest_score} pts</span>
+                          </div>
+
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                              Submissions Analyzed
+                            </span>
+                            <div className="flex items-baseline gap-2 mt-1">
+                              <span className="text-2xl font-black text-emerald-400">{analyticsData.total_submissions}</span>
+                              <span className="text-xs text-gray-400">students</span>
+                            </div>
+                            <span className="text-[10px] text-emerald-400/80 block mt-3">✓ {analyticsData.total_questions} Total Questions</span>
+                          </div>
+
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
+                              Easiest Question
+                            </span>
+                            {analyticsData.easiest_question ? (
+                              <div className="mt-1">
+                                <span className="text-lg font-black text-white block">Question #{analyticsData.easiest_question.number}</span>
+                                <span className="text-xs text-emerald-400 font-bold block mt-0.5">{analyticsData.easiest_question.accuracy}% Correct</span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-500 italic block mt-1">--</span>
+                            )}
+                          </div>
+
+                          <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] p-4 rounded-sm">
+                            <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider block">
+                              Hardest Question
+                            </span>
+                            {analyticsData.hardest_question ? (
+                              <div className="mt-1">
+                                <span className="text-lg font-black text-white block">Question #{analyticsData.hardest_question.number}</span>
+                                <span className="text-xs text-rose-400 font-bold block mt-0.5">{analyticsData.hardest_question.accuracy}% Correct</span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-500 italic block mt-1">--</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Search & Filter Toolbar */}
+                        <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-4 space-y-3">
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                            <div className="relative flex-1 max-w-md">
+                              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                              <input
+                                type="text"
+                                value={analyticsSearchQuery}
+                                onChange={(e) => setAnalyticsSearchQuery(e.target.value)}
+                                placeholder="Search questions by text or number..."
+                                className="w-full pl-9 pr-3 py-1.5 bg-[var(--color-surface-container)] border border-[var(--color-outline-variant)] rounded-sm text-xs text-white focus:border-[var(--color-primary)] focus:outline-none"
+                              />
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className="text-gray-400 font-bold text-[11px] uppercase">Type:</span>
+                              <div className="flex items-center bg-[var(--color-surface-container)] p-1 rounded border border-[var(--color-outline-variant)]">
+                                <button
+                                  onClick={() => setAnalyticsTypeFilter('all')}
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${analyticsTypeFilter === 'all' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                  All ({analyticsData.question_analytics?.length || 0})
+                                </button>
+                                <button
+                                  onClick={() => setAnalyticsTypeFilter('MC')}
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${analyticsTypeFilter === 'MC' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                  MC Only
+                                </button>
+                                <button
+                                  onClick={() => setAnalyticsTypeFilter('FRQ')}
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${analyticsTypeFilter === 'FRQ' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                  FRQ Only
+                                </button>
+                              </div>
+
+                              <span className="text-gray-400 font-bold text-[11px] uppercase ml-2">Difficulty:</span>
+                              <div className="flex items-center bg-[var(--color-surface-container)] p-1 rounded border border-[var(--color-outline-variant)]">
+                                <button
+                                  onClick={() => setAnalyticsDifficultyFilter('all')}
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${analyticsDifficultyFilter === 'all' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                  All
+                                </button>
+                                <button
+                                  onClick={() => setAnalyticsDifficultyFilter('Easy')}
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${analyticsDifficultyFilter === 'Easy' ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                  Easy (≥80%)
+                                </button>
+                                <button
+                                  onClick={() => setAnalyticsDifficultyFilter('Moderate')}
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${analyticsDifficultyFilter === 'Moderate' ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                  Moderate (50-79%)
+                                </button>
+                                <button
+                                  onClick={() => setAnalyticsDifficultyFilter('Hard')}
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${analyticsDifficultyFilter === 'Hard' ? 'bg-rose-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                  Hard (&lt;50%)
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Question-by-Question Item Cards List */}
+                        <div className="space-y-4">
+                          {filteredQuestionAnalytics.length === 0 ? (
+                            <div className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-8 text-center text-gray-400 italic">
+                              No questions match the current search or difficulty filter.
+                            </div>
+                          ) : (
+                            filteredQuestionAnalytics.map((q: any) => {
+                              const isMc = q.type === 'MC';
+                              const correctMcKey = (q.correct_mc || '').trim().toUpperCase();
+
+                              // Difficulty badge colors
+                              let diffBadgeClass = 'bg-amber-500/10 text-amber-300 border-amber-500/30';
+                              if (q.difficulty_rating === 'Easy') diffBadgeClass = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30';
+                              if (q.difficulty_rating === 'Hard') diffBadgeClass = 'bg-rose-500/10 text-rose-300 border-rose-500/30';
+
+                              return (
+                                <div 
+                                  key={q.question_id}
+                                  className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-5 space-y-4 shadow-xs"
+                                >
+                                  {/* Question Header & Performance Bar */}
+                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--color-outline-variant)] pb-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="font-mono text-xs font-black bg-purple-900/60 text-purple-200 border border-purple-500/40 px-2 py-0.5 rounded">
+                                        Question #{q.question_number}
+                                      </span>
+                                      <span className="text-[10px] uppercase font-bold text-zinc-400 bg-black/40 px-2 py-0.5 rounded border border-zinc-700">
+                                        {isMc ? 'Multiple Choice' : 'Free Response'}
+                                      </span>
+                                      <span className="text-[10px] font-bold text-zinc-300 bg-zinc-800 px-2 py-0.5 rounded">
+                                        {q.points} {q.points === 1 ? 'pt' : 'pts'}
+                                      </span>
+                                      <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${diffBadgeClass}`}>
+                                        {q.difficulty_rating} Difficulty
+                                      </span>
+                                    </div>
+
+                                    <div className="flex items-center gap-3">
+                                      <div className="text-right">
+                                        <span className="text-xs font-extrabold text-white block">
+                                          {q.accuracy_percentage}% Accuracy
+                                        </span>
+                                        <span className="text-[10px] text-gray-400 block font-mono">
+                                          {q.correct_count} of {q.total_attempts} attempts correct
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Class Accuracy Gauge Progress Bar */}
+                                  <div className="space-y-1">
+                                    <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden flex">
+                                      <div 
+                                        className={`h-full transition-all ${
+                                          q.accuracy_percentage >= 80 ? 'bg-emerald-500' : q.accuracy_percentage >= 50 ? 'bg-amber-500' : 'bg-rose-500'
+                                        }`}
+                                        style={{ width: `${Math.max(0, Math.min(100, q.accuracy_percentage))}%` }}
+                                      ></div>
+                                    </div>
+                                  </div>
+
+                                  {/* Question Prompt Display */}
+                                  <div className="text-sm font-medium text-white bg-[var(--color-surface-container)]/60 border border-[var(--color-outline-variant)] p-3.5 rounded-sm">
+                                    <LatexRenderer text={q.prompt || 'No question prompt text provided.'} />
+                                  </div>
+
+                                  {/* MULTIPLE CHOICE OPTION RESPONSE BREAKDOWN */}
+                                  {isMc && (
+                                    <div className="space-y-2 pt-2">
+                                      <span className="text-[11px] font-bold text-gray-300 uppercase tracking-wider block font-mono">
+                                        Option Response Breakdown Across Students:
+                                      </span>
+
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        {['A', 'B', 'C', 'D'].map((optKey) => {
+                                          const isCorrectKey = (q.correct_mc || '').trim().toUpperCase().split(',').map((k: string) => k.trim()).includes(optKey);
+                                          const count = q.option_distribution ? q.option_distribution[optKey] || 0 : 0;
+                                          const pct = q.option_percentages ? q.option_percentages[optKey] || 0 : 0;
+
+                                          // Option text if available in q.options
+                                          let optText = '';
+                                          if (Array.isArray(q.options)) {
+                                            const foundOpt = q.options.find((o: any) => (o.id || o.key || '').trim().toUpperCase() === optKey);
+                                            if (foundOpt) optText = foundOpt.text || foundOpt.label || '';
+                                          }
+
+                                          return (
+                                            <div 
+                                              key={optKey}
+                                              className={`p-3 rounded-sm border transition-all space-y-1.5 ${
+                                                isCorrectKey 
+                                                  ? 'bg-emerald-950/30 border-emerald-500/50 text-emerald-200' 
+                                                  : 'bg-[var(--color-surface-container)] border-[var(--color-outline-variant)] text-gray-300'
+                                              }`}
+                                            >
+                                              <div className="flex items-center justify-between text-xs font-bold">
+                                                <div className="flex items-center gap-1.5">
+                                                  <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[11px] ${
+                                                    isCorrectKey ? 'bg-emerald-500 text-black font-black' : 'bg-zinc-800 text-zinc-300'
+                                                  }`}>
+                                                    {optKey}
+                                                  </span>
+                                                  {isCorrectKey && (
+                                                    <span className="text-[10px] font-black text-emerald-400 uppercase tracking-wide flex items-center gap-1">
+                                                      <CheckCircle2 size={11} /> Correct Key
+                                                    </span>
+                                                  )}
+                                                </div>
+
+                                                <div className="font-mono text-xs">
+                                                  {count} student(s) ({pct}%)
+                                                </div>
+                                              </div>
+
+                                              {optText && (
+                                                <p className="text-xs text-zinc-300 font-normal line-clamp-2 pl-0.5">
+                                                  {optText}
+                                                </p>
+                                              )}
+
+                                              {/* Visual Option Percentage Bar */}
+                                              <div className="w-full bg-black/40 h-1.5 rounded-full overflow-hidden">
+                                                <div 
+                                                  className={`h-full rounded-full ${isCorrectKey ? 'bg-emerald-400' : 'bg-purple-500/70'}`}
+                                                  style={{ width: `${pct}%` }}
+                                                ></div>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* FREE RESPONSE / ESSAY EVALUATION BREAKDOWN */}
+                                  {!isMc && (
+                                    <div className="space-y-3 pt-2">
+                                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                                        <div className="bg-emerald-950/20 border border-emerald-500/30 p-2.5 rounded-sm">
+                                          <span className="text-[10px] font-bold text-emerald-400 uppercase block">Full Credit</span>
+                                          <span className="text-lg font-black text-white">{q.frq_score_distribution?.full || 0} students</span>
+                                        </div>
+
+                                        <div className="bg-amber-950/20 border border-amber-500/30 p-2.5 rounded-sm">
+                                          <span className="text-[10px] font-bold text-amber-400 uppercase block">Partial Credit</span>
+                                          <span className="text-lg font-black text-white">{q.frq_score_distribution?.partial || 0} students</span>
+                                        </div>
+
+                                        <div className="bg-rose-950/20 border border-rose-500/30 p-2.5 rounded-sm">
+                                          <span className="text-[10px] font-bold text-rose-400 uppercase block">Zero Credit</span>
+                                          <span className="text-lg font-black text-white">{q.frq_score_distribution?.zero || 0} students</span>
+                                        </div>
+                                      </div>
+
+                                      {q.rubric_guide && (
+                                        <div className="bg-black/30 border border-zinc-800 p-3 rounded-sm text-xs text-zinc-300 space-y-1">
+                                          <span className="text-[10px] font-bold text-purple-400 uppercase block">Teacher Rubric Guide:</span>
+                                          <p className="italic text-zinc-400">{q.rubric_guide}</p>
+                                        </div>
+                                      )}
+
+                                      {/* Sample Student Responses Drawer */}
+                                      {q.sample_responses && q.sample_responses.length > 0 && (
+                                        <div className="space-y-2 pt-1">
+                                          <button
+                                            onClick={() => setExpandedSampleResponses(prev => ({ ...prev, [q.question_id]: !prev[q.question_id] }))}
+                                            className="text-xs font-bold text-purple-300 hover:text-purple-200 flex items-center gap-1.5 cursor-pointer underline"
+                                          >
+                                            <Eye size={12} />
+                                            <span>
+                                              {expandedSampleResponses[q.question_id] ? 'Hide Sample Student Responses' : `View ${q.sample_responses.length} Sample Student Responses`}
+                                            </span>
+                                          </button>
+
+                                          {expandedSampleResponses[q.question_id] && (
+                                            <div className="space-y-2 bg-black/40 p-3 rounded border border-zinc-800">
+                                              {q.sample_responses.map((sResp: any, sIdx: number) => (
+                                                <div key={sIdx} className="p-2 bg-zinc-900 border border-zinc-800 rounded text-xs space-y-1">
+                                                  <div className="flex items-center justify-between text-[11px]">
+                                                    <span className="font-bold text-purple-300">{sResp.student_name}</span>
+                                                    <span className="font-mono text-emerald-400 font-bold">{sResp.score !== undefined ? `${sResp.score} pts` : 'Ungraded'}</span>
+                                                  </div>
+                                                  <p className="text-zinc-300 font-mono text-[11px] italic bg-black/50 p-1.5 rounded">"{sResp.text}"</p>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* SECTION 7: SYSTEM SETTINGS (BACKUP, PASSWORDS ETC.) */}
           {activeTab === 'settings' && (
             <div className="space-y-6 pb-12">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2467,29 +4285,55 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
               </h3>
               
               <p className="text-xs text-[var(--color-on-surface-variant)] leading-relaxed">
-                Provide a valid <strong>Google Gemini API Key</strong> to enable professional, automatic, instant grading assessments on student Free Response questions (FRQs) using AI models. This secret key is safely stored server-side and never exposed to client browsers.
+                Configure an AI Provider (<strong>Groq</strong>, <strong>OpenRouter</strong>, or <strong>Google Gemini</strong>) to enable high-speed automatic grading assessments on student Free Response questions (FRQs). All secret keys are stored securely on the server and never exposed to the client.
               </p>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-2">
                 {/* Status card */}
                 <div className="lg:col-span-1 border border-[var(--color-outline-variant)] bg-[var(--color-surface-dim)] rounded-sm p-4 flex flex-col justify-between">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-gray-500 block mb-1">Grading Key Status</span>
-                    {secretsStatus?.is_configured ? (
-                      <div className="space-y-1.5">
-                        <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black px-2.5 py-1 rounded-sm uppercase">
-                          <Check size={12} /> Active & Configured
-                        </span>
-                        <p className="font-mono text-xs text-gray-600 block mt-1">Key: <code>{secretsStatus.masked_key}</code></p>
+                  <div className="space-y-3">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-gray-500 block mb-1">Active AI Provider</span>
+                      {secretsStatus?.is_configured ? (
+                        <div className="space-y-1.5">
+                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black px-2.5 py-1 rounded-sm uppercase">
+                            <Check size={12} /> {secretsStatus.active_provider ? secretsStatus.active_provider.toUpperCase() : 'ACTIVE'} READY
+                          </span>
+                          <p className="font-mono text-xs text-gray-600 block mt-1">Active Key: <code>{secretsStatus.masked_key}</code></p>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-800 border border-rose-200 text-xs font-black px-2.5 py-1 rounded-sm uppercase">
+                            <AlertCircle size={12} /> Not Configured
+                          </span>
+                          <p className="text-[10px] text-gray-400 block">AI Autograding features are currently locked. Provide an API key on the right to unlock.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-[var(--color-outline-variant)] space-y-1 text-[11px]">
+                      <div className="flex justify-between items-center text-gray-600">
+                        <span className="font-semibold">Groq (Ultra-Fast):</span>
+                        <span>{secretsStatus?.groq_configured ? <span className="text-emerald-600 font-bold font-mono">Configured</span> : <span className="text-gray-400">None</span>}</span>
                       </div>
-                    ) : (
-                      <div className="space-y-1.5">
-                        <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-800 border border-rose-200 text-xs font-black px-2.5 py-1 rounded-sm uppercase">
-                          <AlertCircle size={12} /> Not Configured
-                        </span>
-                        <p className="text-[10px] text-gray-400 block">AI Autograding features are currently locked. Provide a key on the right to unlock.</p>
+                      <div className="flex justify-between items-center text-gray-600">
+                        <span className="font-semibold">OpenRouter:</span>
+                        <span>{secretsStatus?.openrouter_configured ? <span className="text-emerald-600 font-bold font-mono">Configured</span> : <span className="text-gray-400">None</span>}</span>
                       </div>
-                    )}
+                      <div className="flex justify-between items-center text-gray-600">
+                        <span className="font-semibold">Google Gemini:</span>
+                        <span>{secretsStatus?.gemini_configured ? <span className="text-emerald-600 font-bold font-mono">Configured</span> : <span className="text-gray-400">None</span>}</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-[var(--color-outline-variant)]">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-sm">
+                        <Zap size={11} /> Auto-Failover Active
+                      </span>
+                      <p className="text-[10px] text-gray-500 mt-1">
+                        Automatically switches to backup providers if rate limits or errors occur.
+                      </p>
+                    </div>
                   </div>
                   
                   <button 
@@ -2503,26 +4347,92 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 {/* Form key setter */}
                 <div className="lg:col-span-2 space-y-4">
                   <div>
-                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">Set Gemini api key (GEMINI_API_KEY)</label>
+                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">
+                      Groq API Key (Recommended for Speed & Reliability)
+                    </label>
                     <div className="relative">
                       <input 
                         type="password"
-                        placeholder="Paste your AI Studio GEMINI_API_KEY here..."
-                        value={newGeminiKey}
-                        onChange={(e) => setNewGeminiKey(e.target.value)}
-                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm pl-3 pr-10 py-2.5 font-mono"
+                        placeholder={secretsStatus?.groq_configured ? `Groq key configured (${secretsStatus.groq_masked_key})` : "gsk_..."}
+                        value={newGroqKey}
+                        onChange={(e) => setNewGroqKey(e.target.value)}
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm pl-3 pr-10 py-2 font-mono"
                       />
-                      <Bot size={16} className="absolute right-3 top-3 text-neutral-400 select-none" />
+                      <Bot size={16} className="absolute right-3 top-2.5 text-neutral-400 select-none" />
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-1">Make sure you have registered your Google Gemini API key on Google AI Studio dashboard (or purchase a paid keys tier to avoid rate throttles).</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">High-speed inference via Llama 3.3 70B & Qwen models on Groq LPUs.</p>
                   </div>
 
-                  <button 
-                    onClick={handleSaveSecrets}
-                    className="py-2.5 px-6 bg-[var(--color-primary)] hover:bg-[#533C8A] text-white text-xs font-bold rounded-sm shadow-xs transition-colors"
-                  >
-                    Save & Load API Key Secret
-                  </button>
+                  <div>
+                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">
+                      OpenRouter API Key
+                    </label>
+                    <div className="relative">
+                      <input 
+                        type="password"
+                        placeholder={secretsStatus?.openrouter_configured ? `OpenRouter key configured (${secretsStatus.openrouter_masked_key})` : "sk-or-v1-..."}
+                        value={newOpenrouterKey}
+                        onChange={(e) => setNewOpenrouterKey(e.target.value)}
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm pl-3 pr-10 py-2 font-mono"
+                      />
+                      <Bot size={16} className="absolute right-3 top-2.5 text-neutral-400 select-none" />
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-0.5">Universal gateway supporting Claude, GPT-4, Gemini, DeepSeek, and Llama.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-[var(--color-on-surface-variant)] uppercase mb-1">
+                      Google Gemini API Key (GEMINI_API_KEY)
+                    </label>
+                    <div className="relative">
+                      <input 
+                        type="password"
+                        placeholder={secretsStatus?.gemini_configured ? `Gemini key configured (${secretsStatus.gemini_masked_key})` : "AIzaSy..."}
+                        value={newGeminiKey}
+                        onChange={(e) => setNewGeminiKey(e.target.value)}
+                        className="w-full text-xs border border-[var(--color-outline-variant)] bg-[var(--color-surface)] rounded-sm pl-3 pr-10 py-2 font-mono"
+                      />
+                      <Bot size={16} className="absolute right-3 top-2.5 text-neutral-400 select-none" />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 pt-2">
+                    <button 
+                      onClick={() => handleSaveSecrets()}
+                      className="py-2.5 px-6 bg-[var(--color-primary)] hover:bg-[#533C8A] text-white text-xs font-bold rounded-sm shadow-xs transition-colors"
+                    >
+                      Save & Activate AI API Key(s)
+                    </button>
+                    {secretsStatus?.is_configured && (
+                      <div className="flex items-center gap-1.5 ml-auto text-xs">
+                        <span className="text-gray-500 font-semibold text-[11px]">Primary Engine:</span>
+                        {secretsStatus.openrouter_configured && (
+                          <button
+                            onClick={() => handleSaveSecrets({ preferred_ai_provider: 'openrouter' })}
+                            className={`px-2.5 py-1 text-[11px] font-bold rounded-sm border transition-colors ${secretsStatus.active_provider === 'openrouter' ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)]' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                          >
+                            OpenRouter
+                          </button>
+                        )}
+                        {secretsStatus.groq_configured && (
+                          <button
+                            onClick={() => handleSaveSecrets({ preferred_ai_provider: 'groq' })}
+                            className={`px-2.5 py-1 text-[11px] font-bold rounded-sm border transition-colors ${secretsStatus.active_provider === 'groq' ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)]' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                          >
+                            Groq
+                          </button>
+                        )}
+                        {secretsStatus.gemini_configured && (
+                          <button
+                            onClick={() => handleSaveSecrets({ preferred_ai_provider: 'gemini' })}
+                            className={`px-2.5 py-1 text-[11px] font-bold rounded-sm border transition-colors ${secretsStatus.active_provider === 'gemini' ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)]' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                          >
+                            Gemini
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -2876,24 +4786,31 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
 
       {/* MODAL WORKSTATION: STUDENT runner preview overlay (Read Only) */}
       {previewTestObj && (
-        <div className="fixed inset-0 bg-[#1D1B20]/60 flex items-center justify-center z-50 p-6">
-          <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] w-full max-w-4xl h-[90vh] flex flex-col shadow-lg overflow-hidden">
+        <div 
+          className="fixed inset-0 bg-[#1D1B20]/75 flex items-center justify-center z-50 p-3 sm:p-6 backdrop-blur-xs overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPreviewTestObj(null);
+          }}
+        >
+          <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] w-full max-w-4xl max-h-[85vh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-fadeIn my-auto">
             {/* Header */}
-            <div className="h-16 border-b border-[var(--color-outline-variant)] px-6 bg-[var(--color-surface)] flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs font-bold text-[var(--color-primary)] uppercase bg-[var(--color-surface-bright)] px-2 py-0.5 rounded">Previewer Mode</span>
-                <span className="font-bold text-sm tracking-tight">{previewTestObj.event_name}</span>
+            <div className="shrink-0 h-14 border-b border-[var(--color-outline-variant)] px-5 bg-[var(--color-surface)] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0 pr-2">
+                <span className="font-mono text-xs font-bold text-[var(--color-primary)] uppercase bg-[var(--color-surface-bright)] px-2 py-0.5 rounded shrink-0">Previewer Mode</span>
+                <span className="font-bold text-sm tracking-tight truncate">{previewTestObj.event_name}</span>
               </div>
               <button 
                 onClick={() => setPreviewTestObj(null)}
-                className="text-xs bg-red-600 text-white font-bold px-4 py-1.5 rounded-sm"
+                className="shrink-0 flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded-sm transition-colors"
+                title="Exit Preview (Esc)"
               >
-                Exit Preview
+                <X size={14} />
+                <span>Exit Preview</span>
               </button>
             </div>
 
             {/* Core Body Container */}
-            <div className="flex-1 p-6 md:p-8 overflow-y-auto">
+            <div className="flex-1 p-5 md:p-7 overflow-y-auto">
               <div className="border border-[var(--color-outline-variant)] rounded-sm p-6 bg-[var(--color-surface)] space-y-4">
                 <span className="text-xs font-mono font-extrabold text-[var(--color-primary)]">Question {previewTestObj.questions[previewCurQ]?.number || 1} of {previewTestObj.questions.length}</span>
                 <p className="text-lg font-bold leading-relaxed">
@@ -2915,7 +4832,8 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                 {previewTestObj.questions[previewCurQ]?.type === 'MC' && previewTestObj.questions[previewCurQ]?.options && (
                   <div className="space-y-2 mt-4">
                     {Object.entries(previewTestObj.questions[previewCurQ].options!).map(([key, raw]) => {
-                      const isCorrect = previewTestObj.questions[previewCurQ].correct_mc === key;
+                      const previewCorrectKeys = previewTestObj.questions[previewCurQ].correct_mc ? previewTestObj.questions[previewCurQ].correct_mc.split(',').map((k: string) => k.trim().toUpperCase()) : [];
+                      const isCorrect = previewCorrectKeys.includes(key);
                       return (
                         <div key={key} className={`border rounded-sm p-3 flex items-center gap-3 ${isCorrect ? 'border-green-500 bg-green-50/50' : 'border-[var(--color-outline-variant)]'}`}>
                           <div className={`w-6 h-6 rounded-sm flex items-center justify-center text-xs font-bold ${isCorrect ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{key}</div>
@@ -2942,7 +4860,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
             </div>
 
             {/* Footer */}
-            <div className="h-16 border-t border-[var(--color-outline-variant)] px-6 bg-[var(--color-surface)] flex items-center justify-between">
+            <div className="shrink-0 h-14 border-t border-[var(--color-outline-variant)] px-5 bg-[var(--color-surface)] flex items-center justify-between">
               <button 
                 disabled={previewCurQ === 0}
                 onClick={() => setPreviewCurQ(previewCurQ - 1)}
@@ -2975,24 +4893,153 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
         </div>
       )}
 
+      {/* MODAL WORKSTATION: Manual FRQ Grading overlay */}
+      {manualGradeTarget && (
+        <div 
+          className="fixed inset-0 bg-[#121114]/80 flex items-center justify-center z-[60] p-3 sm:p-6 backdrop-blur-xs overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setManualGradeTarget(null);
+          }}
+        >
+          <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] w-full max-w-2xl max-h-[85vh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-fadeIn my-auto">
+            {/* Header: sticky shrink-0 */}
+            <div className="shrink-0 h-14 border-b border-[var(--color-outline-variant)] px-5 bg-[var(--color-surface)] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0 pr-2">
+                <span className="font-mono text-xs font-bold text-[var(--color-primary)] uppercase bg-[var(--color-surface-bright)] px-2.5 py-0.5 rounded shrink-0">Manual Grader</span>
+                <span className="font-bold text-sm tracking-tight text-[var(--color-on-surface)] truncate">Evaluate Essay Response</span>
+              </div>
+              <button 
+                onClick={() => setManualGradeTarget(null)}
+                className="shrink-0 flex items-center gap-1.5 text-xs bg-[var(--color-surface-bright)] hover:bg-red-950/60 hover:text-red-300 text-gray-300 font-bold px-3 py-1.5 rounded-sm border border-[var(--color-outline-variant)] transition-colors"
+                title="Close (Esc)"
+              >
+                <X size={14} />
+                <span>Close</span>
+              </button>
+            </div>
+
+            {/* Scrollable Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-[var(--color-surface-dim)] space-y-4">
+              <div className="space-y-4">
+                <div className="bg-[var(--color-surface)] p-3.5 rounded border border-[var(--color-outline-variant)]">
+                  <span className="text-[10px] text-gray-400 font-bold uppercase block mb-1">Student & Assignment</span>
+                  <span className="text-sm font-black text-[var(--color-on-surface)]">[{manualGradeTarget.student_id}] {manualGradeTarget.student_name} — {manualGradeTarget.event_name}</span>
+                </div>
+                
+                <div className="bg-[var(--color-surface)] p-3.5 rounded border border-[var(--color-outline-variant)]">
+                  <span className="text-[10px] text-gray-400 font-bold uppercase block mb-1">Prompt</span>
+                  <p className="text-sm text-[var(--color-on-surface)] italic whitespace-pre-wrap">{manualGradeTarget.prompt}</p>
+                </div>
+                
+                <div className="bg-[var(--color-surface)] p-3.5 rounded border border-[var(--color-outline-variant)]">
+                  <span className="text-[10px] text-violet-400 font-bold uppercase block mb-1">Rubric Guide</span>
+                  <p className="text-sm text-[var(--color-on-surface)] whitespace-pre-wrap">{manualGradeTarget.rubric_guide}</p>
+                </div>
+
+                <div className="bg-[var(--color-surface-bright)] p-3.5 rounded border border-[var(--color-outline-variant)]">
+                  <span className="text-[10px] text-gray-400 font-bold uppercase block mb-1">Student Essay Response</span>
+                  <p className="text-sm text-white font-mono whitespace-pre-wrap bg-black/30 p-3 rounded">{manualGradeTarget.student_response || <em className="text-gray-500 italic">No text provided.</em>}</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-gray-400 font-bold uppercase">Points Awarded (out of {manualGradeTarget.points})</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      max={manualGradeTarget.points}
+                      value={manualGradeScore}
+                      onChange={(e) => setManualGradeScore(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-full bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-2 text-sm text-[var(--color-on-surface)]"
+                      placeholder={`0-${manualGradeTarget.points}`}
+                    />
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={handleAiSuggestSingle}
+                      disabled={isAiEvaluatingSingle}
+                      className="w-full px-3 py-2 bg-[var(--color-surface-bright)] hover:bg-[#533C8A] text-white border border-[var(--color-outline-variant)] rounded-sm text-xs font-bold inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                    >
+                      {isAiEvaluatingSingle ? (
+                        <>
+                          <span className="animate-spin rounded-sm h-3 w-3 border-2 border-white border-t-transparent"></span>
+                          <span>Asking Gemini...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={13} className="text-yellow-400" />
+                          <span>Suggest Grade with AI</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-gray-400 font-bold uppercase">Critique Notes / Feedback</label>
+                  <textarea 
+                    rows={3}
+                    value={manualGradeNotes}
+                    onChange={(e) => setManualGradeNotes(e.target.value)}
+                    className="w-full bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-3 text-sm text-[var(--color-on-surface)] resize-none"
+                    placeholder="Enter manual feedback / notes for the student..."
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Footer: sticky shrink-0 */}
+            <div className="shrink-0 border-t border-[var(--color-outline-variant)] px-5 py-3 bg-[var(--color-surface)] flex items-center justify-between gap-3">
+              <button 
+                onClick={() => setManualGradeTarget(null)}
+                className="px-4 py-2 border border-[var(--color-outline-variant)] hover:bg-[var(--color-surface-container)] text-gray-300 font-bold rounded-sm text-xs transition-colors"
+              >
+                Cancel / Exit
+              </button>
+              <button 
+                onClick={() => {
+                  handleSaveGrade(manualGradeTarget, Number(manualGradeScore) || 0, manualGradeNotes);
+                  setManualGradeTarget(null);
+                }}
+                disabled={manualGradeScore === '' || Number(manualGradeScore) < 0 || Number(manualGradeScore) > manualGradeTarget.points}
+                className="px-6 py-2 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-sm text-xs shadow-md disabled:bg-gray-700 disabled:text-gray-400 transition-colors"
+              >
+                Save Official Grade
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL WORKSTATION: STUDENT responses viewer overlay */}
       {viewingResponseSessionId && (
-        <div className="fixed inset-0 bg-[#121114]/80 flex items-center justify-center z-50 p-6 backdrop-blur-xs">
-          <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-fadeIn">
+        <div 
+          className="fixed inset-0 bg-[#121114]/80 flex items-center justify-center z-50 p-3 sm:p-6 backdrop-blur-xs overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setViewingResponseSessionId(null);
+              setViewingResponseData(null);
+            }
+          }}
+        >
+          <div className="bg-[var(--color-surface)] rounded-sm border border-[var(--color-outline-variant)] w-full max-w-4xl max-h-[85vh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-fadeIn my-auto">
             {/* Header */}
-            <div className="h-16 border-b border-[var(--color-outline-variant)] px-6 bg-[var(--color-surface)] flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs font-bold text-[var(--color-primary)] uppercase bg-[var(--color-surface-bright)] px-2.5 py-0.5 rounded">Response Visualizer</span>
-                <span className="font-bold text-sm tracking-tight text-[var(--color-on-surface)]">Reviewing Complete Student Submissions Desk</span>
+            <div className="shrink-0 h-14 border-b border-[var(--color-outline-variant)] px-5 bg-[var(--color-surface)] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0 pr-2">
+                <span className="font-mono text-xs font-bold text-[var(--color-primary)] uppercase bg-[var(--color-surface-bright)] px-2.5 py-0.5 rounded shrink-0">Response Visualizer</span>
+                <span className="font-bold text-sm tracking-tight text-[var(--color-on-surface)] truncate">Reviewing Complete Student Submissions Desk</span>
               </div>
               <button 
                 onClick={() => {
                   setViewingResponseSessionId(null);
                   setViewingResponseData(null);
                 }}
-                className="text-xs bg-red-600 hover:bg-red-700 text-white font-bold px-4 py-1.5 rounded-sm"
+                className="shrink-0 flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded-sm transition-colors"
+                title="Close Visualizer (Esc)"
               >
-                Close Visualizer
+                <X size={14} />
+                <span>Close Visualizer</span>
               </button>
             </div>
 
@@ -3049,7 +5096,9 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                     {viewingResponseData.questions.map((q: any, index: number) => {
                       const studentResponse = (viewingResponseData.responses && viewingResponseData.responses[q.id]);
                       const isMC = q.type === 'MC';
-                      const isCorrectMC = isMC && studentResponse === q.correct_mc;
+                      const correctKeys = q.correct_mc ? q.correct_mc.split(',').map((k: string) => k.trim().toUpperCase()) : [];
+                      const studentAnsKey = studentResponse ? studentResponse.trim().toUpperCase() : '';
+                      const isCorrectMC = isMC && correctKeys.includes(studentAnsKey);
                       
                       return (
                         <div key={q.id || index} className="bg-[var(--color-surface)] border border-[var(--color-outline-variant)] rounded-sm p-5 space-y-3 shadow-xs">
@@ -3085,7 +5134,7 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
                                 {Object.entries(q.options || {}).map(([choiceKey, text]: any) => {
                                   const isSelected = studentResponse === choiceKey;
-                                  const isCorrectOption = q.correct_mc === choiceKey;
+                                  const isCorrectOption = correctKeys.includes(choiceKey.trim().toUpperCase());
                                   
                                   return (
                                     <div 
@@ -3198,6 +5247,9 @@ export default function AdminPanel({ onLogout }: AdminPanelProps) {
           </div>
         </div>
       )}
+
+      {/* Roster & Exam Participation Tracker Modal */}
+      {renderParticipationModal()}
     </div>
   );
 }

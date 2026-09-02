@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, Flag, HelpCircle, Calculator, FileText, Info,
   Check, Volume2, ZoomIn, ZoomOut, ChevronUp, ChevronDown, CheckCircle2, 
   Clock, LogOut, ArrowRight, BookOpen, X, RotateCcw, AlertTriangle, HelpCircle as HelpIcon,
-  Play
+  Play, Eye, Search, Award, Lock
 } from 'lucide-react';
 import { Test, Question, Session, SessionAnswer } from '../types';
 import { LatexRenderer } from './LatexRenderer';
@@ -61,6 +61,32 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
   // Local answers cache for smooth instant edits + debounced save
   const [localAnswers, setLocalAnswers] = useState<Record<string, SessionAnswer>>({});
   const saveTimerRef = useRef<any>(null);
+
+  // Released Scorecard view states
+  const [viewingScorecard, setViewingScorecard] = useState<any | null>(null);
+  const [isLoadingScorecard, setIsLoadingScorecard] = useState(false);
+  const [scorecardError, setScorecardError] = useState<string | null>(null);
+  const [scorecardFilter, setScorecardFilter] = useState<'all' | 'mc' | 'frq' | 'incorrect'>('all');
+  const [scorecardSearch, setScorecardSearch] = useState('');
+
+  const handleViewScorecard = async (testId: string) => {
+    setIsLoadingScorecard(true);
+    setScorecardError(null);
+    try {
+      const res = await fetch(`/api/student/scorecard/${testId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setViewingScorecard(data.scorecard);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setScorecardError(err.error || 'Failed to load released scorecard.');
+      }
+    } catch (e: any) {
+      setScorecardError('Network error loading scorecard: ' + e.message);
+    } finally {
+      setIsLoadingScorecard(false);
+    }
+  };
 
   // Fetch student assignments on enter
   const fetchStudentData = async () => {
@@ -362,8 +388,324 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
     }
   };
 
+  const renderScorecardModal = () => {
+    if (isLoadingScorecard) {
+      return (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs z-[300] flex items-center justify-center p-4">
+          <div className="bg-[#18181B] border border-zinc-800 rounded-sm p-6 flex items-center gap-3 text-white shadow-xl">
+            <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs font-bold font-mono">Loading released scorecard & responses...</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (scorecardError) {
+      return (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs z-[300] flex items-center justify-center p-4">
+          <div className="bg-[#18181B] border border-red-500/30 rounded-sm p-6 max-w-md w-full text-white space-y-4 shadow-xl">
+            <div className="flex items-center gap-2 text-red-400 font-bold text-base">
+              <AlertTriangle size={18} />
+              <span>Scorecard Unavailable</span>
+            </div>
+            <p className="text-xs text-zinc-300 leading-relaxed">{scorecardError}</p>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setScorecardError(null)}
+                className="px-4 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-sm text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (!viewingScorecard) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black/85 backdrop-blur-xs z-[300] flex items-center justify-center p-3 md:p-6 overflow-hidden animate-fadeIn select-text">
+        <div className="bg-[#18181B] border border-solid border-[var(--color-outline-variant)] w-full max-w-4xl rounded-sm shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+          {/* Modal Header */}
+          <div className="p-4 md:p-6 bg-[#09090B] border-b border-[var(--color-outline-variant)] flex items-start justify-between gap-4 shrink-0">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-mono text-[10px] md:text-xs font-bold text-[var(--color-primary)] bg-violet-950/40 px-2.5 py-0.5 rounded border border-[var(--color-primary)]/40">
+                  {viewingScorecard.test_id}
+                </span>
+                <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                  Released Scorecard & Graded Responses
+                </span>
+              </div>
+              <h2 className="text-lg md:text-2xl font-black text-white leading-tight">{viewingScorecard.event_name}</h2>
+              <p className="text-xs text-[#A1A1AA] mt-1">
+                Submitted: {new Date(viewingScorecard.submitted_at).toLocaleString()} • Student: <span className="text-white font-mono font-bold">{studentName} ({studentId})</span>
+              </p>
+            </div>
+            <button
+              onClick={() => setViewingScorecard(null)}
+              className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-sm transition-colors cursor-pointer"
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          {/* Metric Summary Banner */}
+          <div className="p-4 bg-zinc-900/60 border-b border-[var(--color-outline-variant)] grid grid-cols-2 md:grid-cols-4 gap-3 shrink-0">
+            <div className="bg-[#18181B] p-3 rounded border border-zinc-800">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block">Overall Score</span>
+              <div className="text-xl md:text-2xl font-black text-white mt-1 font-mono">
+                {viewingScorecard.total_score} <span className="text-xs text-zinc-400 font-normal">/ {viewingScorecard.total_possible} pts</span>
+              </div>
+              <span className="text-[10px] font-semibold text-emerald-400 block mt-0.5">
+                {viewingScorecard.total_possible > 0 ? Math.round((viewingScorecard.total_score / viewingScorecard.total_possible) * 100) : 0}% Accuracy
+              </span>
+            </div>
+
+            <div className="bg-[#18181B] p-3 rounded border border-zinc-800">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400 block">Multiple Choice (MC)</span>
+              <div className="text-xl md:text-2xl font-black text-white mt-1 font-mono">
+                {viewingScorecard.mc_score} <span className="text-xs text-zinc-400 font-normal">/ {viewingScorecard.mc_total} pts</span>
+              </div>
+            </div>
+
+            <div className="bg-[#18181B] p-3 rounded border border-zinc-800">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-purple-400 block">Free Response (FRQ)</span>
+              <div className="text-xl md:text-2xl font-black text-white mt-1 font-mono">
+                {viewingScorecard.frq_score} <span className="text-xs text-zinc-400 font-normal">/ {viewingScorecard.frq_total} pts</span>
+              </div>
+            </div>
+
+            <div className="bg-[#18181B] p-3 rounded border border-zinc-800">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block">Security Log</span>
+              <div className="text-xl md:text-2xl font-black text-white mt-1 font-mono">
+                {viewingScorecard.infraction_count || 0}
+              </div>
+              <span className="text-[10px] text-zinc-400">Proctor Flags</span>
+            </div>
+          </div>
+
+          {/* Filter & Search Bar */}
+          <div className="p-3 bg-[#09090B] border-b border-[var(--color-outline-variant)] flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+            <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+              {(['all', 'mc', 'frq', 'incorrect'] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setScorecardFilter(f)}
+                  className={`px-3 py-1 rounded-sm text-[11px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                    scorecardFilter === f
+                      ? 'bg-[var(--color-primary)] text-white'
+                      : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {f === 'all' ? 'All Questions' : f === 'mc' ? 'MC Only' : f === 'frq' ? 'FRQ Only' : 'Missed Questions'}
+                </button>
+              ))}
+            </div>
+
+            <div className="relative w-full sm:w-64">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input
+                type="text"
+                value={scorecardSearch}
+                onChange={(e) => setScorecardSearch(e.target.value)}
+                placeholder="Search question prompt..."
+                className="w-full pl-9 pr-7 py-1 bg-zinc-900 border border-zinc-700 rounded-sm text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[var(--color-primary)]"
+              />
+              {scorecardSearch && (
+                <button
+                  onClick={() => setScorecardSearch('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs cursor-pointer"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Question Breakdown List */}
+          <div className="p-4 md:p-6 overflow-y-auto space-y-4 flex-1">
+            {viewingScorecard.questions
+              .filter((q: any) => {
+                if (scorecardFilter === 'mc' && q.type !== 'MC') return false;
+                if (scorecardFilter === 'frq' && q.type !== 'FRQ') return false;
+                if (scorecardFilter === 'incorrect') {
+                  if (q.type === 'MC' && q.is_correct_mc) return false;
+                  if (q.type === 'FRQ' && q.frq_grade?.score >= q.points) return false;
+                }
+                if (scorecardSearch) {
+                  const term = scorecardSearch.toLowerCase();
+                  if (!q.prompt.toLowerCase().includes(term) && !String(q.number).includes(term)) return false;
+                }
+                return true;
+              })
+              .map((q: any) => {
+                const isMc = q.type === 'MC';
+                const isCorrectMc = q.is_correct_mc;
+                const frqGrade = q.frq_grade;
+
+                return (
+                  <div 
+                    key={q.id}
+                    className={`bg-[#09090B] border rounded-sm p-4 space-y-3 transition-colors ${
+                      isMc
+                        ? isCorrectMc
+                          ? 'border-emerald-500/30'
+                          : q.student_selected_mc
+                          ? 'border-red-500/30'
+                          : 'border-amber-500/30'
+                        : frqGrade && frqGrade.score >= q.points
+                        ? 'border-emerald-500/30'
+                        : frqGrade && frqGrade.score > 0
+                        ? 'border-amber-500/30'
+                        : 'border-zinc-800'
+                    }`}
+                  >
+                    {/* Question Header */}
+                    <div className="flex items-center justify-between gap-2 border-b border-zinc-800/70 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-bold text-white bg-zinc-800 px-2 py-0.5 rounded">
+                          Q{q.number}
+                        </span>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
+                          isMc ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' : 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                        }`}>
+                          {isMc ? 'Multiple Choice' : 'Free Response (FRQ)'}
+                        </span>
+                        <span className="text-xs text-zinc-400 font-mono font-semibold">
+                          {q.points} pt{q.points !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+
+                      {/* Status Badge */}
+                      {isMc ? (
+                        isCorrectMc ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded border border-emerald-500/20">
+                            <CheckCircle2 size={13} /> Correct (+{q.points} pts)
+                          </span>
+                        ) : q.student_selected_mc ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-red-400 bg-red-500/10 px-2.5 py-0.5 rounded border border-red-500/20">
+                            <X size={13} /> Incorrect (0 / {q.points} pts)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-400 bg-amber-500/10 px-2.5 py-0.5 rounded border border-amber-500/20">
+                            <AlertTriangle size={13} /> Unanswered (0 pts)
+                          </span>
+                        )
+                      ) : (
+                        <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded border ${
+                          frqGrade && frqGrade.score >= q.points
+                            ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                            : frqGrade && frqGrade.score > 0
+                            ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                            : 'text-zinc-400 bg-zinc-800 border-zinc-700'
+                        }`}>
+                          Score: {frqGrade ? frqGrade.score : 0} / {q.points} pts
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Question Prompt */}
+                    <div className="text-sm text-zinc-200 font-sans leading-relaxed">
+                      <LatexRenderer content={q.prompt} />
+                    </div>
+
+                    {/* MC Options Breakdown */}
+                    {isMc && q.options && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-2">
+                        {Object.entries(q.options).map(([optKey, optVal]) => {
+                          const isSelectedByStudent = q.student_selected_mc?.toUpperCase() === optKey.toUpperCase();
+                          const isCorrectKey = q.correct_mc?.split(',').map((k: string) => k.trim().toUpperCase()).includes(optKey.toUpperCase());
+
+                          let optionStyle = "bg-zinc-900 border-zinc-800 text-zinc-300";
+                          if (isSelectedByStudent && isCorrectKey) {
+                            optionStyle = "bg-emerald-950/60 border-emerald-500 text-emerald-200 font-semibold";
+                          } else if (isSelectedByStudent && !isCorrectKey) {
+                            optionStyle = "bg-red-950/60 border-red-500 text-red-200";
+                          } else if (isCorrectKey) {
+                            optionStyle = "bg-emerald-950/30 border-emerald-500/60 text-emerald-300 font-semibold";
+                          }
+
+                          return (
+                            <div
+                              key={optKey}
+                              className={`p-2.5 rounded border text-xs flex items-start justify-between gap-2 ${optionStyle}`}
+                            >
+                              <div className="flex items-start gap-2">
+                                <span className="font-mono font-bold text-zinc-400">{optKey}.</span>
+                                <LatexRenderer content={String(optVal || '')} />
+                              </div>
+                              <div className="shrink-0 flex items-center gap-1 text-[10px] font-bold">
+                                {isSelectedByStudent && (
+                                  <span className={`px-1.5 py-0.5 rounded ${isCorrectKey ? 'bg-emerald-500 text-black' : 'bg-red-500 text-white'}`}>
+                                    Your Pick
+                                  </span>
+                                )}
+                                {isCorrectKey && !isSelectedByStudent && (
+                                  <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-1.5 py-0.5 rounded">
+                                    Correct Key
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* FRQ Response & Feedback */}
+                    {!isMc && (
+                      <div className="space-y-3 pt-2">
+                        {/* Student Typed Text */}
+                        <div className="bg-[#18181B] border border-zinc-800 rounded p-3 space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+                            Your Submitted Response:
+                          </span>
+                          <div className="text-xs text-zinc-200 whitespace-pre-wrap font-mono leading-relaxed bg-[#09090B] p-3 rounded border border-zinc-800">
+                            {q.student_frq_text && q.student_frq_text.trim() !== ''
+                              ? q.student_frq_text
+                              : '(No response typed for this question)'}
+                          </div>
+                        </div>
+
+                        {/* Evaluator Notes & Critique */}
+                        {frqGrade?.notes && frqGrade.notes.trim() !== '' && (
+                          <div className="bg-purple-950/20 border border-purple-500/30 rounded p-3 space-y-1">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-purple-400 block flex items-center gap-1">
+                              <Info size={12} /> Instructor / Evaluator Critique & Feedback:
+                            </span>
+                            <p className="text-xs text-purple-200 font-sans leading-relaxed">
+                              {frqGrade.notes}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Rubric Guide Reference */}
+                        {q.rubric_guide && q.rubric_guide.trim() !== '' && (
+                          <div className="bg-zinc-900 border border-zinc-800 rounded p-3 space-y-1">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+                              Rubric Criteria & Answer Key:
+                            </span>
+                            <p className="text-xs text-zinc-300 font-sans leading-relaxed">
+                              {q.rubric_guide}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderModals = () => (
     <>
+      {renderScorecardModal()}
       {showSubmitConfirm && (
         <div className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4">
           <div className="bg-[#18181B] border border-solid border-[var(--color-outline-variant)] rounded-sm p-6 w-full max-w-sm">
@@ -633,12 +975,35 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
 
                         <div className="pt-2">
                           {test.is_completed ? (
-                            <button 
-                              disabled
-                              className="w-full py-2.5 bg-neutral-900 text-neutral-600 rounded-sm font-bold text-[13px] cursor-not-allowed flex items-center justify-center gap-2 border border-neutral-800"
-                            >
-                              <CheckCircle2 size={14} /> Exam Sealed
-                            </button>
+                            test.final_grade ? (
+                              <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-sm p-3.5 space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] uppercase font-bold text-emerald-400">Graded & Released</span>
+                                  <span className="text-sm font-mono font-bold text-white bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/30">
+                                    {test.final_grade.total_score} / {test.final_grade.total_possible} pts
+                                  </span>
+                                </div>
+                                <button 
+                                  onClick={() => handleViewScorecard(test.test_id)}
+                                  disabled={isLoadingScorecard}
+                                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-sm font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
+                                >
+                                  <Eye size={14} /> View Scorecard & Responses
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="space-y-1.5">
+                                <button 
+                                  disabled
+                                  className="w-full py-2.5 bg-neutral-900 text-neutral-400 rounded-sm font-bold text-xs cursor-not-allowed flex items-center justify-center gap-2 border border-neutral-800"
+                                >
+                                  <CheckCircle2 size={14} className="text-emerald-500" /> Submitted • Awaiting Released Grades
+                                </button>
+                                <p className="text-[10px] text-zinc-500 text-center italic">
+                                  Instructor will release grades & responses soon.
+                                </p>
+                              </div>
+                            )
                           ) : test.in_progress_session_id ? (
                             <button 
                               onClick={() => setSelectedInstructionTest(test)}
@@ -662,6 +1027,7 @@ export default function StudentRunner({ studentId, studentName, onLogout }: Stud
               </div>
             </>
           )}
+          {renderScorecardModal()}
         </main>
       </div>
     );

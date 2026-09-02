@@ -1,0 +1,19 @@
+{
+  "student_id": "S002",
+  "test_id": "TEST_1",
+  "session_id": "c1a1c4e6-e735-4113-b097-add560e9e330",
+  "submitted_at": "2026-08-24T15:42:02.549Z",
+  "mc_score": 0,
+  "mc_total": 10,
+  "frq_grades": {
+    "3": {
+      "score": 0,
+      "notes": "[AI Autograde] The student's response is nonsensical and does not address the prompt in any way. It fails to identify the error in the student's reasoning or provide the correct number of solutions."
+    }
+  },
+  "frq_score": 0,
+  "frq_total": 10,
+  "total_score": 0,
+  "total_possible": 20,
+  "infraction_count": 14
+}

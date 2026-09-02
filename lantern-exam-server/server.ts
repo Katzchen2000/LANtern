@@ -1,12 +1,55 @@
+import { readJsonSafe_pg, writeJsonAtomic_pg, updateJsonSafe_pg } from './db_overrides';
+import { db } from "./src/db";
+import { config, gemini_usage, students, tests, sessions, results as dbResults } from "./src/db/schema";
+import { eq, and } from "drizzle-orm";
 import express from 'express';
 import compression from 'compression';
 import { GoogleGenAI, Type } from '@google/genai';
+import OpenAI from 'openai';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import crypto from 'crypto';
 import os from 'os';
 import AdmZip from 'adm-zip';
+
+const originalReaddir = fs.readdir;
+fs.readdir = (async function(pathStr: any, options: any) {
+  if (typeof pathStr === 'string' && process.env.SQL_HOST) {
+    try {
+      const dbPromise = (async () => {
+        if (pathStr === 'data/sessions') {
+          const res = await db.select().from(sessions);
+          if (res && res.length > 0) return res.map(r => r.session_id + '.json');
+        } else if (pathStr === 'data/results') {
+          const res = await db.selectDistinct({ test_id: dbResults.test_id }).from(dbResults);
+          if (res && res.length > 0) return res.map(r => r.test_id);
+        } else if (pathStr.startsWith('data/results/')) {
+          const testId = pathStr.split('/').pop();
+          if (testId) {
+            const res = await db.select().from(dbResults).where(eq(dbResults.test_id, testId));
+            if (res && res.length > 0) return res.map(r => r.student_id + '.json');
+          }
+        } else if (pathStr === 'tests' || pathStr === './tests') {
+          const res = await db.select().from(tests);
+          if (res && res.length > 0) return res.map(r => r.test_id + '.json');
+        }
+        return null;
+      })();
+
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
+      const dbResult = await Promise.race([dbPromise, timeoutPromise]);
+      if (dbResult !== null) {
+        return dbResult;
+      }
+    } catch (e) {
+      // Fallback to disk if DB query fails
+    }
+  }
+  return originalReaddir.apply(this, [pathStr, options] as any);
+}) as any;
+
 import nodemailer from 'nodemailer';
 
 // In-process Async Mutex per file to prevent concurrent-write races
@@ -48,45 +91,17 @@ function getFileMutex(filePath: string): Mutex {
 
 // Atomic file writing helper
 async function writeJsonAtomic(filePath: string, data: any): Promise<void> {
-  const mutex = getFileMutex(filePath);
-  const release = await mutex.acquire();
-  try {
-    const parentDir = path.dirname(filePath);
-    await fs.mkdir(parentDir, { recursive: true });
-    
-    const tmpPath = filePath + '.tmp';
-    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-    await fs.rename(tmpPath, filePath);
-  } finally {
-    release();
-  }
+  return writeJsonAtomic_pg(filePath, data);
 }
 
 // Read JSON safe helper
 async function readJsonSafe<T = any>(filePath: string, defaultValue: T): Promise<T> {
-  try {
-    const content = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(content) as T;
-  } catch (e) {
-    return defaultValue;
-  }
+  return readJsonSafe_pg(filePath, defaultValue);
 }
 
 // Atomic read-modify-write JSON helper using mutex locks
 async function updateJsonSafe<T = any>(filePath: string, updateFn: (data: T) => T | Promise<T>, defaultValue: T): Promise<void> {
-  const mutex = getFileMutex(filePath);
-  const release = await mutex.acquire();
-  try {
-    const currentData = await readJsonSafe<T>(filePath, defaultValue);
-    const updatedData = await updateFn(currentData);
-    const parentDir = path.dirname(filePath);
-    await fs.mkdir(parentDir, { recursive: true });
-    const tmpPath = filePath + '.tmp';
-    await fs.writeFile(tmpPath, JSON.stringify(updatedData, null, 2), 'utf-8');
-    await fs.rename(tmpPath, filePath);
-  } finally {
-    release();
-  }
+  return updateJsonSafe_pg(filePath, updateFn, defaultValue);
 }
 
 // Crypto password hashing
@@ -110,7 +125,7 @@ function estimateFrqTokens(item: { prompt?: string; rubric_guide?: string; stude
   const totalWords = promptWords + rubricWords + responseWords;
   
   // Standard scholastic rubric prompt boilerplate + system instruction overhead in tokens
-  const estimatedInputTokens = Math.ceil(totalWords * 1.35) + 600;
+  const estimatedInputTokens = Math.round(totalWords * 1.38) + 600;
   
   // Typical output Qualitative commentary + score JSON structure in tokens
   const estimatedOutputTokens = 300;
@@ -120,8 +135,8 @@ function estimateFrqTokens(item: { prompt?: string; rubric_guide?: string; stude
 
 async function getGeminiUsageStats() {
   const todayStr = new Date().toLocaleDateString('en-US'); // Day-based safe reset comparison
-  const usage = await readJsonSafe<any>('data/gemini-usage.json', { quota_limit: 1500000, used_count: 0, last_reset_date: todayStr });
-  let quota_limit = usage.quota_limit || 1500000;
+  const usage = await readJsonSafe<any>('data/gemini-usage.json', { quota_limit: 15000000, used_count: 0, last_reset_date: todayStr });
+  let quota_limit = usage.quota_limit || 15000000;
   let used_count = usage.used_count || 0;
   
   // Daily reset check
@@ -132,10 +147,10 @@ async function getGeminiUsageStats() {
     await writeJsonAtomic('data/gemini-usage.json', usage).catch(() => {});
   }
   
-  // Backwards-compatibility check: migrate old smaller quotas to 1.5M tokens
-  if (quota_limit <= 150000) {
-    quota_limit = 1500000;
-    used_count = used_count === 0 ? 0 : Math.min(used_count * 10, 1490000);
+  // Backwards-compatibility check: migrate old smaller quotas to 15M tokens
+  if (quota_limit <= 1500000) {
+    quota_limit = 15000000;
+    used_count = used_count === 0 ? 0 : Math.min(used_count * 10, 14900000);
     usage.quota_limit = quota_limit;
     usage.used_count = used_count;
     await writeJsonAtomic('data/gemini-usage.json', usage).catch(() => {});
@@ -153,8 +168,8 @@ async function getGeminiUsageStats() {
 async function recordGeminiUsage(count = 1500) {
   try {
     const todayStr = new Date().toLocaleDateString('en-US');
-    const usage = await readJsonSafe<any>('data/gemini-usage.json', { quota_limit: 1500000, used_count: 0, last_reset_date: todayStr });
-    let quota_limit = usage.quota_limit || 1500000;
+    const usage = await readJsonSafe<any>('data/gemini-usage.json', { quota_limit: 15000000, used_count: 0, last_reset_date: todayStr });
+    let quota_limit = usage.quota_limit || 15000000;
     let used_count = usage.used_count || 0;
 
     // Daily reset check on write
@@ -163,9 +178,9 @@ async function recordGeminiUsage(count = 1500) {
       usage.last_reset_date = todayStr;
     }
 
-    if (quota_limit <= 150000) {
-      quota_limit = 1500000;
-      used_count = used_count === 0 ? 0 : Math.min(used_count * 10, 1490000);
+    if (quota_limit <= 1500000) {
+      quota_limit = 15000000;
+      used_count = used_count === 0 ? 0 : Math.min(used_count * 10, 14900000);
       usage.quota_limit = quota_limit;
     }
     usage.used_count = used_count + count;
@@ -173,6 +188,231 @@ async function recordGeminiUsage(count = 1500) {
   } catch (e) {
     console.error('Error recording gemini usage:', e);
   }
+}
+
+async function getAllConfiguredAiClients() {
+  let configObj = await readJsonSafe<any>('data/config.json', {});
+  try {
+    const rawDisk = await fs.readFile('data/config.json', 'utf-8').catch(() => '{}');
+    const diskParsed = JSON.parse(rawDisk);
+    configObj = { ...diskParsed, ...configObj };
+  } catch (e) {}
+
+  const groqKey = (process.env.GROQ_API_KEY || configObj.groq_api_key || '').trim();
+  const openrouterKey = (process.env.OPENROUTER_API_KEY || configObj.openrouter_api_key || '').trim();
+  const explicitGeminiKey = (configObj.gemini_api_key || '').trim();
+  const envGeminiKey = (process.env.GEMINI_API_KEY || '').trim();
+  
+  // Only use envGeminiKey if it looks like an actual Gemini API key (starts with AIza) or isn't an OAuth/GCP access token (starts with AQ.)
+  const geminiKey = explicitGeminiKey || (envGeminiKey.startsWith('AIza') ? envGeminiKey : (explicitGeminiKey ? explicitGeminiKey : ''));
+  const preferred = (configObj.preferred_ai_provider || '').toLowerCase();
+
+  const providers: Array<{
+    provider: 'openrouter' | 'groq' | 'gemini';
+    apiKey: string;
+    client: any;
+    model: string;
+  }> = [];
+
+  if (openrouterKey) {
+    providers.push({
+      provider: 'openrouter',
+      apiKey: openrouterKey,
+      client: new OpenAI({
+        apiKey: openrouterKey,
+        baseURL: 'https://openrouter.ai/api/v1',
+        defaultHeaders: {
+          'HTTP-Referer': 'https://lantern.tryouts',
+          'X-Title': 'LANtern Assessment Engine'
+        }
+      }),
+      model: 'google/gemini-2.5-flash-lite'
+    });
+  }
+
+  if (groqKey) {
+    providers.push({
+      provider: 'groq',
+      apiKey: groqKey,
+      client: new OpenAI({
+        apiKey: groqKey,
+        baseURL: 'https://api.groq.com/openai/v1',
+      }),
+      model: 'qwen/qwen3.6-27b'
+    });
+  }
+
+  if (geminiKey) {
+    providers.push({
+      provider: 'gemini',
+      apiKey: geminiKey,
+      client: new GoogleGenAI({
+        apiKey: geminiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      }),
+      model: 'gemini-2.5-flash-lite'
+    });
+  }
+
+  if (providers.length === 0) return [];
+
+  // Sort providers so preferred provider is first, followed by remaining configured providers
+  if (preferred) {
+    providers.sort((a, b) => {
+      if (a.provider === preferred) return -1;
+      if (b.provider === preferred) return 1;
+      return 0;
+    });
+  }
+
+  return providers;
+}
+
+async function getAiClientConfig() {
+  const clients = await getAllConfiguredAiClients();
+  return clients.length > 0 ? clients[0] : null;
+}
+
+async function evaluateFrqWithSingleProvider(
+  aiConfig: { provider: 'openrouter' | 'groq' | 'gemini'; apiKey: string; client: any; model: string },
+  item: { prompt: string; rubric_guide?: string; points: number; student_response?: string }
+): Promise<{ score: number; notes: string }> {
+  const maxPts = Number(item.points) || 1;
+  const promptText = `
+Core Essay Prompt: "${item.prompt}"
+Rubric Guide Criteria: "${item.rubric_guide || 'No specific criteria provided.'}"
+Max Points Possible: ${maxPts}
+
+Student Response:
+"""
+${item.student_response || 'No student response submitted.'}
+"""
+`;
+
+  if (aiConfig.provider === 'groq' || aiConfig.provider === 'openrouter') {
+    const modelsToTry = aiConfig.provider === 'groq'
+      ? ['qwen/qwen3.6-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'groq/compound-mini', 'llama-3.3-70b-versatile']
+      : [aiConfig.model, 'google/gemini-2.5-flash', 'openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct', 'deepseek/deepseek-chat'];
+
+    let lastErr: any = null;
+    for (const modelName of modelsToTry) {
+      try {
+        const completion = await aiConfig.client.chat.completions.create({
+          model: modelName,
+          messages: [
+            {
+              role: 'system',
+              content: `You are an objective academic evaluator. Evaluate the student response against the rubric criteria and award a score between 0 and ${maxPts} points. Provide concise qualitative feedback. Respond strictly with a JSON object in this exact format: {"score": <number between 0 and ${maxPts}>, "notes": "<concise feedback note>"}`
+            },
+            {
+              role: 'user',
+              content: promptText
+            }
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.1
+        });
+
+        const rawText = completion.choices?.[0]?.message?.content?.trim() || '';
+        let cleanText = rawText;
+        if (cleanText.startsWith('```')) {
+          cleanText = cleanText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+        }
+        const parsed = JSON.parse(cleanText);
+        const score = Math.max(0, Math.min(maxPts, Number(parsed.score) || 0));
+        const notes = String(parsed.notes || `Evaluated by ${aiConfig.provider.toUpperCase()} AI.`);
+        return { score, notes };
+      } catch (e: any) {
+        console.warn(`[AI Engine] Attempt with ${aiConfig.provider} model ${modelName} failed:`, e?.message);
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error(`Failed to evaluate response with ${aiConfig.provider}`);
+  } else {
+    // Gemini provider
+    const response = await aiConfig.client.models.generateContent({
+      model: aiConfig.model,
+      contents: promptText,
+      config: {
+        systemInstruction: `You are an objective academic evaluator. Evaluate the student response against the rubric criteria and award an integer or half-integer score between 0 and max points. Provide a concise, constructive feedback critique note explaining the score. Output strictly valid JSON matching the schema.`,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            score: {
+              type: Type.NUMBER,
+              description: "Awarded points score between 0 and max points."
+            },
+            notes: {
+              type: Type.STRING,
+              description: "Concise qualitative feedback or explanation."
+            }
+          },
+          required: ["score", "notes"]
+        }
+      }
+    });
+
+    const rawText = response.text ? response.text.trim() : '';
+    if (!rawText) {
+      throw new Error('Empty evaluation response from Gemini.');
+    }
+
+    let cleanText = rawText;
+    if (cleanText.startsWith('```')) {
+      cleanText = cleanText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+    }
+    const aiResult = JSON.parse(cleanText);
+    const score = Math.max(0, Math.min(maxPts, Number(aiResult.score) || 0));
+    const notes = String(aiResult.notes || 'Evaluated by Gemini AI.');
+    return { score, notes };
+  }
+}
+
+// Automatically evaluates using primary provider, and automatically cascades/switches to next provider upon failure
+async function evaluateFrqWithAi(
+  item: { prompt: string; rubric_guide?: string; points: number; student_response?: string }
+): Promise<{ score: number; notes: string; provider: string; switchedAutomatically: boolean }> {
+  const providers = await getAllConfiguredAiClients();
+  if (providers.length === 0) {
+    throw new Error('No AI API Key is configured. Please provide a key for OpenRouter, Groq, or Gemini.');
+  }
+
+  const errors: string[] = [];
+  for (let i = 0; i < providers.length; i++) {
+    const currentProvider = providers[i];
+    try {
+      // If provider is Gemini, check simulated budget
+      if (currentProvider.provider === 'gemini') {
+        const stats = await getGeminiUsageStats();
+        if (stats.left <= 0) {
+          throw new Error('Simulated Gemini token budget exhausted');
+        }
+      }
+
+      const evalResult = await evaluateFrqWithSingleProvider(currentProvider, item);
+      const switchedAutomatically = i > 0;
+      if (switchedAutomatically) {
+        console.log(`[AI Failover Success] Automatically switched to ${currentProvider.provider.toUpperCase()} after previous providers failed.`);
+      }
+      return {
+        score: evalResult.score,
+        notes: evalResult.notes,
+        provider: currentProvider.provider,
+        switchedAutomatically
+      };
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      console.warn(`[AI Failover Warning] Provider '${currentProvider.provider}' failed: ${errMsg}. Attempting automatic failover...`);
+      errors.push(`${currentProvider.provider}: ${errMsg}`);
+    }
+  }
+
+  throw new Error(`All configured AI providers failed. [${errors.join(' | ')}]`);
 }
 
 // JWT-like simple tokens using crypto HMAC
@@ -239,6 +479,8 @@ interface Test {
   active: boolean;
   questions: Question[];
   instructions?: string;
+  start_icon?: string;
+  grades_published?: boolean;
 }
 
 interface Student {
@@ -293,11 +535,31 @@ interface Result {
 }
 
 // Normalized format helper to handle both original and custom uploaded JSON formats seamlessly
-function normalizeTest(input: any): Test {
-  const test_id = String(input.test_id || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
-  const event_name = String(input.event_name || 'Untitled Event').trim();
+function normalizeTest(input: any, filename?: string): Test {
+  let rawId = '';
+  // If filename is provided, use it as primary ID source unless input.test_id is already explicit
+  if (filename) {
+    const base = path.basename(filename, path.extname(filename)).trim();
+    if (base) rawId = base;
+  }
+  if (!rawId && input.test_id) {
+    rawId = String(input.test_id).trim();
+  }
+  if (!rawId && input.event_name) {
+    rawId = String(input.event_name).trim();
+  }
+  if (!rawId) {
+    rawId = 'TEST_' + Date.now();
+  }
+
+  // Preserve clean ID without weird characters
+  const test_id = rawId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const event_name = String(input.event_name || input.name || input.title || rawId.replace(/_/g, ' ')).trim();
   const duration = Number(input.duration) || 30;
-  const active = input.active !== false;
+  const active = input.active !== false; // Default to true unless explicitly false
+  const instructions = typeof input.instructions === 'string' ? input.instructions : undefined;
+  const start_icon = typeof input.start_icon === 'string' ? input.start_icon : undefined;
+  const grades_published = !!input.grades_published;
 
   let questions: Question[] = [];
   if (input.questions && Array.isArray(input.questions)) {
@@ -307,6 +569,7 @@ function normalizeTest(input: any): Test {
       const type = (String(q.question_type ?? q.type ?? 'MC').toUpperCase() === 'FRQ') ? 'FRQ' : 'MC';
       const prompt = String(q.prompt ?? '').trim();
       const points = Number(q.points) || 1;
+      const image_url = q.image_url ? String(q.image_url).trim() : undefined;
 
       // Extract options record
       let options: Record<string, string> = q.options ? { ...q.options } : {};
@@ -331,6 +594,7 @@ function normalizeTest(input: any): Test {
         type,
         prompt,
         points,
+        image_url,
         options: type === 'MC' ? options : undefined,
         correct_mc,
         rubric_guide,
@@ -352,8 +616,85 @@ function normalizeTest(input: any): Test {
     event_name,
     duration,
     active,
+    instructions,
+    start_icon,
+    grades_published,
     questions
   };
+}
+
+// Resilient test search & matching helper that handles case differences, spaces, underscores, and aliases
+async function findTest(queryIdOrName: string): Promise<{ test: Test; testId: string; filePath: string } | null> {
+  if (!queryIdOrName) return null;
+  const rawQuery = String(queryIdOrName).trim();
+  if (!rawQuery) return null;
+
+  // 1. Direct path check
+  const directName = rawQuery.endsWith('.json') ? rawQuery : `${rawQuery}.json`;
+  const directPath = path.join('tests', directName);
+  try {
+    const directTest = await readJsonSafe<Test>(directPath, null);
+    if (directTest) {
+      return { 
+        test: directTest, 
+        testId: directTest.test_id || rawQuery.replace(/\.json$/i, ''), 
+        filePath: directPath 
+      };
+    }
+  } catch (e) {}
+
+  // 2. Scan all test files in tests/
+  try {
+    const files = await fs.readdir('tests');
+    const cleanStr = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const targetClean = cleanStr(rawQuery);
+
+    const loadedTests: { file: string; test: Test; baseName: string }[] = [];
+    for (const f of files) {
+      if (f.endsWith('.json')) {
+        const t = await readJsonSafe<Test>(path.join('tests', f), null);
+        if (t) {
+          loadedTests.push({ file: f, test: t, baseName: f.replace(/\.json$/i, '') });
+        }
+      }
+    }
+
+    // Step A: Exact baseName or test_id case-insensitive match
+    for (const item of loadedTests) {
+      if (item.baseName.toLowerCase() === rawQuery.toLowerCase() || 
+          (item.test.test_id && item.test.test_id.toLowerCase() === rawQuery.toLowerCase())) {
+        return { test: item.test, testId: item.test.test_id || item.baseName, filePath: path.join('tests', item.file) };
+      }
+    }
+
+    // Step B: Normalized alphanumeric match (ignores spaces, underscores, dashes, capitalization)
+    for (const item of loadedTests) {
+      if (cleanStr(item.baseName) === targetClean || 
+          (item.test.test_id && cleanStr(item.test.test_id) === targetClean)) {
+        return { test: item.test, testId: item.test.test_id || item.baseName, filePath: path.join('tests', item.file) };
+      }
+    }
+
+    // Step C: Event name match
+    for (const item of loadedTests) {
+      if (item.test.event_name) {
+        if (item.test.event_name.toLowerCase() === rawQuery.toLowerCase() || cleanStr(item.test.event_name) === targetClean) {
+          return { test: item.test, testId: item.test.test_id || item.baseName, filePath: path.join('tests', item.file) };
+        }
+      }
+    }
+
+    // Step D: Partial substring match if distinctive
+    for (const item of loadedTests) {
+      if (cleanStr(item.baseName).includes(targetClean) || 
+          (item.test.test_id && cleanStr(item.test.test_id).includes(targetClean)) ||
+          (item.test.event_name && cleanStr(item.test.event_name).includes(targetClean))) {
+        return { test: item.test, testId: item.test.test_id || item.baseName, filePath: path.join('tests', item.file) };
+      }
+    }
+  } catch (e) {}
+
+  return null;
 }
 
 // Bootstrapping Seed Data
@@ -514,7 +855,11 @@ async function bootstrapDirsAndFiles() {
 }
 
 async function startServer() {
-  await bootstrapDirsAndFiles();
+  try {
+    await bootstrapDirsAndFiles();
+  } catch (bootErr) {
+    console.error("Error during initial bootstrapDirsAndFiles:", bootErr);
+  }
 
   const app = express();
   app.use(compression());
@@ -731,7 +1076,17 @@ async function startServer() {
     config.admin_hash = hash;
     config.admin_salt = salt;
     await writeJsonAtomic('data/config.json', config);
-    res.json({ success: true });
+    
+    // Generate new token with updated config and set cookie
+    const token = signToken({ admin: true }, config.jwt_secret);
+    res.cookie('admin_token', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    });
+    
+    res.json({ success: true, token });
   });
 
   // Tests Operations
@@ -741,15 +1096,18 @@ async function startServer() {
       const testsList: any[] = [];
       for (const file of files) {
         if (file.endsWith('.json')) {
-          const test = await readJsonSafe(`tests/${file}`, null);
+          const test = await readJsonSafe<Test>(`tests/${file}`, null);
           if (test) {
             const mcCount = test.questions ? test.questions.filter((q: any) => q.type === 'MC').length : 0;
             const frqCount = test.questions ? test.questions.filter((q: any) => q.type === 'FRQ').length : 0;
             testsList.push({
-              test_id: test.test_id,
-              event_name: test.event_name,
+              test_id: test.test_id || file.replace(/\.json$/i, ''),
+              event_name: test.event_name || test.test_id || file.replace(/\.json$/i, ''),
               duration: test.duration || 30,
-              active: test.active ?? true,
+              active: test.active !== false,
+              instructions: test.instructions || '',
+              start_icon: test.start_icon,
+              grades_published: !!test.grades_published,
               mc_count: mcCount,
               frq_count: frqCount,
               total_questions: test.questions ? test.questions.length : 0
@@ -764,11 +1122,11 @@ async function startServer() {
   });
 
   app.get('/api/admin/tests/:id', adminAuthMiddleware, async (req, res) => {
-    const test = await readJsonSafe(`tests/${req.params.id}.json`, null);
-    if (!test) {
+    const found = await findTest(req.params.id);
+    if (!found || !found.test) {
       return res.status(404).json({ error: 'Test not found' });
     }
-    res.json(test);
+    res.json(found.test);
   });
 
   app.post('/api/admin/tests', adminAuthMiddleware, async (req, res) => {
@@ -808,6 +1166,191 @@ async function startServer() {
     }
   });
 
+  // Question-by-question Item Analysis & Testing Analytics endpoint
+  app.get('/api/admin/tests/:id/analytics', adminAuthMiddleware, async (req, res) => {
+    try {
+      const testId = req.params.id;
+      const found = await findTest(testId);
+      if (!found || !found.test) {
+        return res.status(404).json({ error: 'Test not found' });
+      }
+      const test = found.test;
+      const canonicalTestId = test.test_id || found.testId || testId;
+
+      const resultsMap = new Map<string, Result>();
+      const sessionsMap = new Map<string, Session>();
+
+      // Load results from data/results/${canonicalTestId}
+      try {
+        const resDir = `data/results/${canonicalTestId}`;
+        const exists = await fs.stat(resDir).then(s => s.isDirectory()).catch(() => false);
+        if (exists) {
+          const resFiles = await fs.readdir(resDir);
+          for (const rf of resFiles) {
+            if (rf.endsWith('.json')) {
+              const resObj = await readJsonSafe<Result>(`${resDir}/${rf}`, null);
+              if (resObj) {
+                resultsMap.set(resObj.student_id, resObj);
+                if (resObj.session_id) {
+                  const sess = await readJsonSafe<Session>(`data/sessions/${resObj.session_id}.json`, null);
+                  if (sess) {
+                    sessionsMap.set(resObj.student_id, sess);
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {}
+
+      // Fallback: check all sessions in data/sessions if sessionsMap is missing entries
+      try {
+        const sFiles = await fs.readdir('data/sessions');
+        for (const sf of sFiles) {
+          if (sf.endsWith('.json')) {
+            const sess = await readJsonSafe<Session>(`data/sessions/${sf}`, null);
+            if (sess && (sess.test_id === canonicalTestId || sess.test_id === testId) && sess.status !== 'in_progress') {
+              if (!sessionsMap.has(sess.student_id)) {
+                sessionsMap.set(sess.student_id, sess);
+              }
+            }
+          }
+        }
+      } catch (e) {}
+
+      const roster = await readJsonSafe<Roster>('data/roster.json', { students: [] });
+      const studentNames = new Map(roster.students.map(s => [s.student_id, s.student_name]));
+
+      const submissionsCount = resultsMap.size > 0 ? resultsMap.size : sessionsMap.size;
+      const questions = test.questions || [];
+
+      const questionAnalytics = questions.map((q: any, idx: number) => {
+        const qId = q.id || `q_${idx + 1}`;
+        const qType = q.type || 'MC';
+        const qPoints = Number(q.points) || 1;
+        const correctMc = (q.correct_mc || '').trim().toUpperCase();
+
+        let attemptedCount = 0;
+        let correctCount = 0;
+        let totalPointsEarned = 0;
+        const optionCounts: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
+        const frqDistribution = { full: 0, partial: 0, zero: 0 };
+        const sampleResponses: { student_id: string; student_name: string; text: string; score?: number }[] = [];
+
+        // Aggregate across student sessions
+        const studentIds = Array.from(new Set([...Array.from(resultsMap.keys()), ...Array.from(sessionsMap.keys())]));
+
+        studentIds.forEach((studentId) => {
+          const result = resultsMap.get(studentId);
+          const session = sessionsMap.get(studentId);
+          const ansObj = session?.answers ? session.answers[qId] : null;
+
+          if (qType === 'MC') {
+            const selected = ansObj?.selected_mc ? String(ansObj.selected_mc).trim().toUpperCase() : null;
+            if (selected) {
+              attemptedCount++;
+              optionCounts[selected] = (optionCounts[selected] || 0) + 1;
+              const correctKeys = correctMc.split(',').map((k: string) => k.trim().toUpperCase());
+              if (correctKeys.includes(selected)) {
+                correctCount++;
+                totalPointsEarned += qPoints;
+              }
+            }
+          } else {
+            // FRQ or Numerical
+            const text = ansObj?.frq_text ? String(ansObj.frq_text).trim() : '';
+            if (text) attemptedCount++;
+            const frqGrade = result?.frq_grades ? result.frq_grades[qId] : null;
+            const score = frqGrade !== undefined && frqGrade !== null ? Number(frqGrade.score) || 0 : 0;
+            totalPointsEarned += score;
+
+            if (score >= qPoints) {
+              correctCount++;
+              frqDistribution.full++;
+            } else if (score > 0) {
+              frqDistribution.partial++;
+            } else {
+              frqDistribution.zero++;
+            }
+
+            if (text) {
+              sampleResponses.push({
+                student_id: studentId,
+                student_name: studentNames.get(studentId) || studentId,
+                text,
+                score: frqGrade?.score
+              });
+            }
+          }
+        });
+
+        const activeDenominator = attemptedCount > 0 ? attemptedCount : (submissionsCount > 0 ? submissionsCount : 1);
+        const accuracyPct = Math.round((correctCount / activeDenominator) * 100);
+        const avgScore = submissionsCount > 0 ? Math.round((totalPointsEarned / submissionsCount) * 100) / 100 : 0;
+
+        let difficulty: 'Easy' | 'Moderate' | 'Hard' = 'Moderate';
+        if (accuracyPct >= 80) difficulty = 'Easy';
+        else if (accuracyPct < 50) difficulty = 'Hard';
+
+        const optionPercentages: Record<string, number> = {};
+        Object.keys(optionCounts).forEach(optKey => {
+          optionPercentages[optKey] = attemptedCount > 0 ? Math.round((optionCounts[optKey] / attemptedCount) * 100) : 0;
+        });
+
+        return {
+          question_id: qId,
+          question_number: idx + 1,
+          prompt: q.prompt,
+          type: qType,
+          points: qPoints,
+          correct_mc: q.correct_mc,
+          options: q.options || q.choices || [],
+          rubric_guide: q.rubric_guide || '',
+          total_attempts: attemptedCount,
+          correct_count: correctCount,
+          accuracy_percentage: accuracyPct,
+          average_points_earned: avgScore,
+          difficulty_rating: difficulty,
+          option_distribution: optionCounts,
+          option_percentages: optionPercentages,
+          frq_score_distribution: frqDistribution,
+          sample_responses: sampleResponses.slice(0, 5)
+        };
+      });
+
+      const totalScoresList = Array.from(resultsMap.values()).map(r => r.total_score);
+      totalScoresList.sort((a, b) => a - b);
+      const sumScores = totalScoresList.reduce((a, b) => a + b, 0);
+      const avgScore = submissionsCount > 0 && totalScoresList.length > 0 ? (sumScores / totalScoresList.length).toFixed(1) : '0';
+      const medianScore = totalScoresList.length > 0 ? totalScoresList[Math.floor(totalScoresList.length / 2)] : 0;
+
+      let hardestQuestion = null;
+      let easiestQuestion = null;
+      if (questionAnalytics.length > 0) {
+        const sortedByAccuracy = [...questionAnalytics].sort((a, b) => a.accuracy_percentage - b.accuracy_percentage);
+        hardestQuestion = sortedByAccuracy[0];
+        easiestQuestion = sortedByAccuracy[sortedByAccuracy.length - 1];
+      }
+
+      res.json({
+        test_id: canonicalTestId,
+        event_name: test.event_name,
+        total_questions: questions.length,
+        total_submissions: submissionsCount,
+        average_score: Number(avgScore),
+        median_score: medianScore,
+        highest_score: totalScoresList.length > 0 ? totalScoresList[totalScoresList.length - 1] : 0,
+        lowest_score: totalScoresList.length > 0 ? totalScoresList[0] : 0,
+        total_possible_points: questions.reduce((a: number, q: any) => a + (Number(q.points) || 1), 0),
+        hardest_question: hardestQuestion ? { id: hardestQuestion.question_id, number: hardestQuestion.question_number, prompt: hardestQuestion.prompt, accuracy: hardestQuestion.accuracy_percentage } : null,
+        easiest_question: easiestQuestion ? { id: easiestQuestion.question_id, number: easiestQuestion.question_number, prompt: easiestQuestion.prompt, accuracy: easiestQuestion.accuracy_percentage } : null,
+        question_analytics: questionAnalytics
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.delete('/api/admin/tests/:id', adminAuthMiddleware, async (req, res) => {
     const testId = req.params.id;
     const testPath = `tests/${testId}.json`;
@@ -843,18 +1386,88 @@ async function startServer() {
     }
   });
 
-  // Import JSON Master Test
-  app.post('/api/admin/tests/import', adminAuthMiddleware, async (req, res) => {
+  // Import JSON Master Test (Supports single test, batch tests, multiple files, and sets test_id from filename)
+  app.post(['/api/admin/tests/import', '/api/admin/tests/bulk-import'], adminAuthMiddleware, async (req, res) => {
     try {
-      const { testJson } = req.body;
-      const parsed = typeof testJson === 'string' ? JSON.parse(testJson) : testJson;
-      if (!parsed.test_id || !parsed.event_name) {
-        return res.status(400).json({ error: 'Invalid test master JSON shape: needs test_id and event_name' });
+      const body = req.body;
+      const imported: string[] = [];
+      const errors: { filename?: string; error: string }[] = [];
+
+      // Helper function to process a single test item
+      async function processSingleTest(rawTest: any, fileOrigin?: string) {
+        if (!rawTest || typeof rawTest !== 'object') {
+          throw new Error('Invalid test object format: payload must be a JSON object');
+        }
+
+        const normalized = normalizeTest(rawTest, fileOrigin);
+        if (!normalized.test_id) {
+          throw new Error('Could not derive a valid test ID');
+        }
+
+        await writeJsonAtomic(`tests/${normalized.test_id}.json`, normalized);
+        imported.push(normalized.test_id);
       }
-      
-      const normalized = normalizeTest(parsed);
-      await writeJsonAtomic(`tests/${normalized.test_id}.json`, normalized);
-      res.json({ success: true, test_id: normalized.test_id });
+
+      // Check if body is an array of test items
+      if (Array.isArray(body)) {
+        for (let i = 0; i < body.length; i++) {
+          const item = body[i];
+          try {
+            await processSingleTest(item.testJson || item, item.filename);
+          } catch (e: any) {
+            errors.push({ filename: item.filename || `Item #${i + 1}`, error: e.message });
+          }
+        }
+      } else if (Array.isArray(body.tests)) {
+        // Body has { tests: [...] }
+        for (let i = 0; i < body.tests.length; i++) {
+          const item = body.tests[i];
+          try {
+            await processSingleTest(item.testJson || item, item.filename);
+          } catch (e: any) {
+            errors.push({ filename: item.filename || `Test #${i + 1}`, error: e.message });
+          }
+        }
+      } else if (body.testJson !== undefined) {
+        // Single or array within testJson
+        const parsed = typeof body.testJson === 'string' ? JSON.parse(body.testJson) : body.testJson;
+        if (Array.isArray(parsed)) {
+          for (let i = 0; i < parsed.length; i++) {
+            try {
+              const origin = body.filename ? `${path.basename(body.filename, path.extname(body.filename))}_${i + 1}` : undefined;
+              await processSingleTest(parsed[i], origin);
+            } catch (e: any) {
+              errors.push({ filename: body.filename || `Item #${i + 1}`, error: e.message });
+            }
+          }
+        } else {
+          try {
+            await processSingleTest(parsed, body.filename);
+          } catch (e: any) {
+            errors.push({ filename: body.filename || 'Uploaded File', error: e.message });
+          }
+        }
+      } else {
+        // Direct single object in body
+        try {
+          await processSingleTest(body, body.filename);
+        } catch (e: any) {
+          errors.push({ filename: body.filename || 'Uploaded Test', error: e.message });
+        }
+      }
+
+      if (imported.length === 0 && errors.length > 0) {
+        return res.status(400).json({ error: errors.map(e => `${e.filename}: ${e.error}`).join('; '), errors });
+      }
+
+      res.json({
+        success: true,
+        test_id: imported[0],
+        imported,
+        count: imported.length,
+        errors: errors.length > 0 ? errors : undefined,
+        message: `Successfully imported ${imported.length} test blueprint(s) with IDs: ${imported.join(', ')}`
+      });
     } catch (error: any) {
       res.status(400).json({ error: 'Failed to process JSON content: ' + error.message });
     }
@@ -920,16 +1533,42 @@ async function startServer() {
   app.get('/api/admin/secrets-status', adminAuthMiddleware, async (req, res) => {
     try {
       const config = await readJsonSafe<any>('data/config.json', {});
-      const key = process.env.GEMINI_API_KEY || config.gemini_api_key || '';
-      const isConfigured = !!key;
+      const groqKey = process.env.GROQ_API_KEY || config.groq_api_key || '';
+      const openrouterKey = process.env.OPENROUTER_API_KEY || config.openrouter_api_key || '';
+      const geminiKey = process.env.GEMINI_API_KEY || config.gemini_api_key || '';
+
+      const isConfigured = !!(groqKey || openrouterKey || geminiKey);
+      const preferred = (config.preferred_ai_provider || '').toLowerCase();
+      
+      let activeProvider = 'none';
+      if (preferred === 'openrouter' && openrouterKey) activeProvider = 'openrouter';
+      else if (preferred === 'groq' && groqKey) activeProvider = 'groq';
+      else if (preferred === 'gemini' && geminiKey) activeProvider = 'gemini';
+      else if (openrouterKey) activeProvider = 'openrouter';
+      else if (groqKey) activeProvider = 'groq';
+      else if (geminiKey) activeProvider = 'gemini';
+
+      const activeKey = activeProvider === 'openrouter' ? openrouterKey : (activeProvider === 'groq' ? groqKey : (activeProvider === 'gemini' ? geminiKey : ''));
+
       let masked = '';
-      if (isConfigured) {
-        masked = key.length > 8 ? `${key.substring(0, 4)}••••••••${key.substring(key.length - 4)}` : '••••••••';
+      if (activeKey) {
+        masked = activeKey.length > 8 ? `${activeKey.substring(0, 4)}••••••••${activeKey.substring(activeKey.length - 4)}` : '••••••••';
       }
+
+      const maskAny = (k: string) => k ? (k.length > 8 ? `${k.substring(0, 4)}••••••••${k.substring(k.length - 4)}` : '••••••••') : '';
+
       const stats = await getGeminiUsageStats();
       res.json({
         is_configured: isConfigured,
+        active_provider: activeProvider,
+        preferred_provider: preferred || activeProvider,
         masked_key: masked,
+        groq_configured: !!groqKey,
+        groq_masked_key: maskAny(groqKey),
+        openrouter_configured: !!openrouterKey,
+        openrouter_masked_key: maskAny(openrouterKey),
+        gemini_configured: !!geminiKey,
+        gemini_masked_key: maskAny(geminiKey),
         gemini_usage_left: stats.left,
         gemini_quota_limit: stats.quota_limit,
         estimated_frqs_left: stats.estimated_frqs_left
@@ -939,20 +1578,46 @@ async function startServer() {
     }
   });
 
-  // Save/Update GEMINI_API_KEY secret
+  // Save/Update API Key secrets (supports groq_api_key, openrouter_api_key, gemini_api_key, preferred_ai_provider)
   app.post('/api/admin/secrets', adminAuthMiddleware, async (req, res) => {
     try {
-      const { gemini_api_key } = req.body;
-      if (!gemini_api_key || !gemini_api_key.trim()) {
-        return res.status(400).json({ error: 'Key cannot be empty.' });
-      }
-      const trimmedKey = gemini_api_key.trim();
+      const { gemini_api_key, groq_api_key, openrouter_api_key, preferred_ai_provider } = req.body;
       const config = await readJsonSafe<any>('data/config.json', { admin_hash: '', admin_salt: '', jwt_secret: 'fallback' });
-      config.gemini_api_key = trimmedKey;
+      let updatedSomething = false;
+
+      if (preferred_ai_provider !== undefined) {
+        config.preferred_ai_provider = (preferred_ai_provider || '').trim().toLowerCase();
+        updatedSomething = true;
+      }
+
+      if (groq_api_key !== undefined) {
+        const trimmed = (groq_api_key || '').trim();
+        config.groq_api_key = trimmed;
+        process.env.GROQ_API_KEY = trimmed;
+        updatedSomething = true;
+      }
+
+      if (openrouter_api_key !== undefined) {
+        const trimmed = (openrouter_api_key || '').trim();
+        config.openrouter_api_key = trimmed;
+        process.env.OPENROUTER_API_KEY = trimmed;
+        updatedSomething = true;
+      }
+
+      if (gemini_api_key !== undefined) {
+        const trimmed = (gemini_api_key || '').trim();
+        config.gemini_api_key = trimmed;
+        process.env.GEMINI_API_KEY = trimmed;
+        updatedSomething = true;
+      }
+
+      if (!updatedSomething) {
+        return res.status(400).json({ error: 'Please provide at least one key to update.' });
+      }
+
       await writeJsonAtomic('data/config.json', config);
-      process.env.GEMINI_API_KEY = trimmedKey;
-      console.log('Successfully updated GEMINI_API_KEY in memory and config.json');
-      res.json({ success: true });
+      console.log('Successfully updated AI secret keys in memory and config.json');
+      res.json({ success: true, message: 'AI API Key(s) saved successfully.' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -1283,6 +1948,68 @@ async function startServer() {
     }
   });
 
+  // Batch email scorecards for multiple selected tests
+  app.post('/api/admin/email-results-batch', adminAuthMiddleware, async (req, res) => {
+    try {
+      const { test_ids } = req.body;
+      if (!Array.isArray(test_ids) || test_ids.length === 0) {
+        return res.status(400).json({ error: 'Missing or empty test_ids array' });
+      }
+
+      const roster = await readJsonSafe<Roster>('data/roster.json', { students: [] });
+      let totalSuccess = 0;
+      let totalSimulated = 0;
+      let totalSkipped = 0;
+      const errors: string[] = [];
+
+      for (const testId of test_ids) {
+        const test = await readJsonSafe<Test>(`tests/${testId}.json`, null);
+        if (!test) continue;
+
+        for (const s of roster.students) {
+          if (!s.email) {
+            totalSkipped++;
+            continue;
+          }
+
+          const resultPath = `data/results/${testId}/${s.student_id}.json`;
+          const result = await readJsonSafe<Result>(resultPath, null);
+          if (!result) {
+            totalSkipped++;
+            continue;
+          }
+
+          const session = await readJsonSafe<Session>(`data/sessions/${result.session_id}.json`, null);
+          if (!session) {
+            totalSkipped++;
+            continue;
+          }
+
+          const mailRes = await sendStudentGradeEmail(s, test, session, result);
+          if (mailRes.success) {
+            if (mailRes.simulated) {
+              totalSimulated++;
+            } else {
+              totalSuccess++;
+            }
+          } else {
+            errors.push(`[${test.event_name}] ${s.student_name} (${s.student_id}): ${mailRes.error}`);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        successCount: totalSuccess,
+        simulatedCount: totalSimulated,
+        skippedCount: totalSkipped,
+        errors
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Email a single student result
   app.post('/api/admin/email-result', adminAuthMiddleware, async (req, res) => {
     try {
@@ -1444,8 +2171,8 @@ async function startServer() {
         if (assignedIdx !== -1 && cells[assignedIdx]) {
           assigned = cells[assignedIdx]
             .replace(/["']/g, '')
-            .split(';')
-            .map((t: string) => t.trim().toUpperCase())
+            .split(/[;,|]/)
+            .map((t: string) => t.trim())
             .filter((t: string) => t.length > 0);
         }
 
@@ -1839,11 +2566,44 @@ async function startServer() {
     res.json({ success: true, result: resObj });
   });
 
-  // AI Autograde Pending FRQs
+  // Single FRQ AI Suggestion
+  app.post('/api/admin/grading/ai-single', adminAuthMiddleware, async (req, res) => {
+    try {
+      const { prompt, rubric_guide, points, student_response } = req.body;
+      if (!prompt || points === undefined) {
+        return res.status(400).json({ error: 'Missing required grading parameters (prompt, points).' });
+      }
+
+      const evalResult = await evaluateFrqWithAi({
+        prompt,
+        rubric_guide,
+        points: Number(points) || 1,
+        student_response
+      });
+
+      if (evalResult.provider === 'gemini') {
+        await recordGeminiUsage(1200);
+      }
+
+      res.json({
+        success: true,
+        score: evalResult.score,
+        notes: evalResult.notes,
+        provider: evalResult.provider,
+        switched_automatically: evalResult.switchedAutomatically
+      });
+    } catch (err: any) {
+      console.error('Error in ai-single suggestion:', err);
+      res.status(500).json({ error: err.message || 'AI evaluation failed.' });
+    }
+  });
+
+  // AI Autograde Pending FRQs with Automatic Multi-Provider Switching
   app.post('/api/admin/grading/autograde', adminAuthMiddleware, async (req, res) => {
     try {
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(400).json({ error: 'GEMINI_API_KEY environment variable is not configured. Please add it under Settings > Secrets panel.' });
+      const providers = await getAllConfiguredAiClients();
+      if (providers.length === 0) {
+        return res.status(400).json({ error: 'No AI API Key is configured. Please add an OpenRouter, Groq, or Gemini key under Settings > Secrets panel.' });
       }
 
       const roster = await readJsonSafe<Roster>('data/roster.json', { students: [] });
@@ -1895,132 +2655,79 @@ async function startServer() {
         return res.json({ success: true, graded_count: 0, message: 'All pending essay responses are already graded.' });
       }
 
-      let stats = await getGeminiUsageStats();
-      if (stats.left <= 0) {
-        return res.status(400).json({ error: `Your simulated Gemini daily token budget is fully depleted (0 tokens left). Grading paused. Under simulation guidelines, this budget resets automatically tomorrow. Alternatively, you can override the limits.` });
-      }
-
-      const ai = new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          }
-        }
-      });
-
       let gradedCount = 0;
-      let limitHitMessage = '';
+      let lastItemError = '';
+      const providersUsed = new Set<string>();
       
-      // Control concurrency to avoid hitting Gemini rate limits (429) when grading bulk submissions
+      // Control concurrency
       const chunkSize = 4;
       for (let i = 0; i < pendingItems.length; i += chunkSize) {
-        const statsNow = await getGeminiUsageStats();
-        if (statsNow.left <= 0) {
-          limitHitMessage = 'Daily simulated token limit reached. Remaining items were paused.';
-          break;
-        }
-
         const batch = pendingItems.slice(i, i + chunkSize);
         await Promise.all(batch.map(async (item) => {
           try {
-            const checkStats = await getGeminiUsageStats();
-            const tokenEstimate = estimateFrqTokens(item);
-            if (checkStats.left < tokenEstimate) {
-              limitHitMessage = `Simulated daily token quota reached (${checkStats.left.toLocaleString()} left, required ~${tokenEstimate.toLocaleString()}). Evaluation paused.`;
-              return;
-            }
-
-            const response = await ai.models.generateContent({
-              model: "gemini-3.5-flash",
-              contents: `
-                Core Essay Prompt: "${item.prompt}"
-                Rubric Guide Criteria: "${item.rubric_guide}"
-                Max Points Possible: ${item.points}
-
-                Student Response Draft:
-                """
-                ${item.student_response}
-                """
-              `,
-              config: {
-                systemInstruction: "You are a professional AI test grader. Evaluate the student response against the rubric, scoring from 0 up to max points. Provide a short helpful qualitative note of feedback. Output strictly valid JSON.",
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    score: {
-                      type: Type.NUMBER,
-                      description: "Awarded points score. Must be between 0 and max points."
-                    },
-                    notes: {
-                      type: Type.STRING,
-                      description: "Feedback critique or reason."
-                    }
-                  },
-                  required: ["score", "notes"]
-                }
-              }
+            const evalResult = await evaluateFrqWithAi({
+              prompt: item.prompt,
+              rubric_guide: item.rubric_guide,
+              points: item.points,
+              student_response: item.student_response
             });
 
-            const rawText = response.text ? response.text.trim() : '';
-            if (rawText) {
-              let cleanText = rawText;
-              if (cleanText.startsWith('```')) {
-                cleanText = cleanText.replace(/^```json\n/, '').replace(/^```\n/, '').replace(/\n```$/, '');
+            providersUsed.add(evalResult.provider.toUpperCase());
+
+            // Safely write the grade using atomic read-modify-write updater
+            await updateJsonSafe<Result>(item.resultPath, (resObj) => {
+              if (resObj) {
+                resObj.frq_grades = resObj.frq_grades || {};
+                resObj.frq_grades[item.qId] = {
+                  score: evalResult.score,
+                  notes: `[AI Autograde] ${evalResult.notes}`
+                };
+
+                // Recalculate sums
+                let frqScoreSum = 0;
+                Object.values(resObj.frq_grades).forEach((f: any) => {
+                  frqScoreSum += (Number(f?.score) || 0);
+                });
+
+                resObj.frq_score = frqScoreSum;
+                resObj.total_score = (Number(resObj.mc_score) || 0) + frqScoreSum;
               }
-              const aiResult = JSON.parse(cleanText);
-              let score = Math.max(0, Math.min(item.points, Number(aiResult.score || 0)));
-              let notes = aiResult.notes || 'Graded by AI.';
-
-              // Safely write the grade using atomic read-modify-write updater
-              await updateJsonSafe<Result>(item.resultPath, (resObj) => {
-                if (resObj) {
-                  resObj.frq_grades = resObj.frq_grades || {};
-                  resObj.frq_grades[item.qId] = {
-                    score,
-                    notes: `[AI Autograde] ${notes}`
-                  };
-
-                  // Recalculate sums
-                  let frqScoreSum = 0;
-                  Object.values(resObj.frq_grades).forEach((f: any) => {
-                    frqScoreSum += f.score;
-                  });
-
-                  resObj.frq_score = frqScoreSum;
-                  resObj.total_score = resObj.mc_score + frqScoreSum;
-                }
-                return resObj;
-              }, null as any);
-              
+              return resObj;
+            }, null as any);
+            
+            if (evalResult.provider === 'gemini') {
               const tokensForThisFrq = estimateFrqTokens(item);
               await recordGeminiUsage(tokensForThisFrq);
-              gradedCount++;
             }
-          } catch (err) {
+            gradedCount++;
+          } catch (err: any) {
             console.error('Error autograding item:', err);
+            lastItemError = err?.message || String(err);
           }
         }));
 
-        if (limitHitMessage) {
-          break;
-        }
-
         // Give a breath period between batches for rate safety
         if (i + chunkSize < pendingItems.length) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 300));
         }
       }
 
+      if (gradedCount === 0 && pendingItems.length > 0 && lastItemError) {
+        return res.status(500).json({
+          error: `AI Autograding encountered an error: ${lastItemError}`
+        });
+      }
+
       const finalStats = await getGeminiUsageStats();
+      const usedSummary = Array.from(providersUsed).join(', ') || 'AI';
       res.json({
         success: true,
         graded_count: gradedCount,
-        message: limitHitMessage || `Successfully evaluated ${gradedCount} short essay response(s) with Gemini AI.`,
+        message: `Successfully evaluated ${gradedCount} short essay response(s) using automatic multi-provider routing (${usedSummary}).`,
         gemini_usage_left: finalStats.left,
         gemini_quota_limit: finalStats.quota_limit,
-        estimated_frqs_left: finalStats.estimated_frqs_left
+        estimated_frqs_left: finalStats.estimated_frqs_left,
+        providers_used: Array.from(providersUsed)
       });
     } catch (error: any) {
       console.error(error);
@@ -2298,9 +3005,16 @@ async function startServer() {
     if (!student_id) {
       return res.status(400).json({ error: 'Please enter a Student ID to continue.' });
     }
-    const cleanId = student_id.trim();
+    const cleanId = String(student_id).trim();
+    const cleanAlphaNum = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
     const roster = await readJsonSafe<Roster>('data/roster.json', { students: [] });
-    const sObj = roster.students.find(s => s.student_id.toLowerCase() === cleanId.toLowerCase());
+    
+    // Check exact case-insensitive, or alphanumeric normalized match
+    const sObj = roster.students.find(s => 
+      s.student_id.toLowerCase() === cleanId.toLowerCase() ||
+      cleanAlphaNum(s.student_id) === cleanAlphaNum(cleanId)
+    );
+
     if (!sObj) {
       return res.status(404).json({ error: `Student ID "${cleanId}" not found in current roster.` });
     }
@@ -2348,53 +3062,85 @@ async function startServer() {
 
     // Check completed exams
     const activeAssignments: any[] = [];
-    for (const testId of sObj.assigned_tests || []) {
-      // Is test active?
-      const test = await readJsonSafe<Test>(`tests/${testId}.json`, null);
-      if (test && test.active) {
-        // Is already graded/completed?
-        const resultFile = `data/results/${testId}/${sId}.json`;
-        let isCompleted = false;
-        try {
-          await fs.access(resultFile);
-          isCompleted = true;
-        } catch (e) {}
+    const seenTestIds = new Set<string>();
 
-        // Has active run in-progress session?
-        let inProgressSessionId: string | null = null;
-        try {
-          const files = await fs.readdir('data/sessions');
-          for (const rawFile of files) {
-            if (rawFile.endsWith('.json')) {
-              const sess = await readJsonSafe<Session>(`data/sessions/${rawFile}`, null);
-              if (sess && sess.student_id === sId && sess.test_id === testId) {
-                if (sess.status === 'in_progress') {
-                  const hasExp = new Date() > new Date(sess.expires_at);
-                  if (hasExp) {
-                    // Auto-submit stale expired session on the fly
-                    sess.status = 'auto_submitted';
-                    sess.submitted_at = new Date().toISOString();
-                    await writeJsonAtomic(`data/sessions/${sess.session_id}.json`, sess);
-                    await evaluateAndSaveResult(sess);
-                    isCompleted = true; // Since the results file is now generated on disk!
-                  } else {
-                    inProgressSessionId = sess.session_id;
-                  }
+    for (const testRef of sObj.assigned_tests || []) {
+      const found = await findTest(testRef);
+      if (found && found.test) {
+        const test = found.test;
+        const testId = test.test_id || found.testId;
+
+        // Deduplicate assignments
+        if (seenTestIds.has(testId)) continue;
+        seenTestIds.add(testId);
+
+        // Allow active unless explicitly false
+        if (test.active !== false) {
+          // Is already graded/completed?
+          let isCompleted = false;
+          let finalGrade = null;
+          
+          const resultPaths = [
+            `data/results/${testId}/${sId}.json`,
+            `data/results/${found.testId}/${sId}.json`,
+            `data/results/${testRef}/${sId}.json`
+          ];
+
+          for (const rp of resultPaths) {
+            try {
+              const resObj = await readJsonSafe(rp, null);
+              if (resObj) {
+                isCompleted = true;
+                if (test.grades_published) {
+                  finalGrade = resObj;
                 }
                 break;
               }
-            }
+            } catch (e) {}
           }
-        } catch (e) {}
 
-        activeAssignments.push({
-          test_id: testId,
-          event_name: test.event_name,
-          duration: test.duration,
-          is_completed: isCompleted,
-          in_progress_session_id: inProgressSessionId,
-          instructions: test.instructions || ""
-        });
+          // Has active run in-progress session?
+          let inProgressSessionId: string | null = null;
+          try {
+            const sFiles = await fs.readdir('data/sessions');
+            for (const sf of sFiles) {
+              if (sf.endsWith('.json')) {
+                const sess = await readJsonSafe<Session>(`data/sessions/${sf}`, null);
+                if (sess && sess.student_id === sId) {
+                  const sessFound = await findTest(sess.test_id);
+                  if (sess.test_id === testId || sess.test_id === testRef || (sessFound && sessFound.testId === found.testId)) {
+                    if (sess.status === 'in_progress') {
+                      const hasExp = new Date() > new Date(sess.expires_at);
+                      if (hasExp) {
+                        sess.status = 'auto_submitted';
+                        sess.submitted_at = new Date().toISOString();
+                        await writeJsonAtomic(`data/sessions/${sf}`, sess);
+                        await evaluateAndSaveResult(sess);
+                        isCompleted = true;
+                      } else {
+                        inProgressSessionId = sess.session_id;
+                      }
+                    } else if (sess.status === 'submitted' || sess.status === 'auto_submitted') {
+                      isCompleted = true;
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+          } catch(e) {}
+
+          activeAssignments.push({
+            test_id: testId,
+            event_name: test.event_name || testId,
+            duration: test.duration || 30,
+            is_completed: isCompleted,
+            final_grade: finalGrade,
+            in_progress_session_id: inProgressSessionId,
+            instructions: test.instructions || "",
+            start_icon: test.start_icon
+          });
+        }
       }
     }
 
@@ -2406,6 +3152,117 @@ async function startServer() {
     });
   });
 
+  // Student view released scorecard and question-by-question response breakdown
+  app.get('/api/student/scorecard/:test_id', studentAuthMiddleware, async (req, res) => {
+    try {
+      const sId = (req as any).student_id;
+      const testId = req.params.test_id;
+      const found = await findTest(testId);
+      if (!found || !found.test) {
+        return res.status(404).json({ error: 'Test not found' });
+      }
+
+      const test = found.test;
+      const canonicalTestId = test.test_id || found.testId || testId;
+
+      if (!test.grades_published) {
+        return res.status(403).json({ error: 'Grades for this test have not been published by the instructor yet.' });
+      }
+
+      // Read result file for this student and test
+      const resultPaths = [
+        `data/results/${canonicalTestId}/${sId}.json`,
+        `data/results/${testId}/${sId}.json`
+      ];
+
+      let resObj: Result | null = null;
+      for (const rp of resultPaths) {
+        resObj = await readJsonSafe<Result>(rp, null);
+        if (resObj) break;
+      }
+
+      if (!resObj) {
+        return res.status(404).json({ error: 'No graded submission found for this student on this test.' });
+      }
+
+      // Load session to get student answers
+      let sessionObj: Session | null = null;
+      if (resObj.session_id) {
+        sessionObj = await readJsonSafe<Session>(`data/sessions/${resObj.session_id}.json`, null);
+      }
+      if (!sessionObj) {
+        // Fallback: search sessions directory for matching student & test
+        try {
+          const sFiles = await fs.readdir('data/sessions');
+          for (const sf of sFiles) {
+            if (sf.endsWith('.json')) {
+              const sess = await readJsonSafe<Session>(`data/sessions/${sf}`, null);
+              if (sess && sess.student_id === sId && (sess.test_id === canonicalTestId || sess.test_id === testId)) {
+                sessionObj = sess;
+                break;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      const answersObj = sessionObj?.answers || {};
+
+      // Build question by question breakdown
+      const questionsBreakdown = (test.questions || []).map((q: any) => {
+        const studentAns = answersObj[q.id];
+        const selectedMc = studentAns?.selected_mc || null;
+        const frqText = studentAns?.frq_text || '';
+        const frqGrade = resObj?.frq_grades ? resObj.frq_grades[q.id] : null;
+
+        let isCorrectMc: boolean | null = null;
+        if (q.type === 'MC') {
+          if (selectedMc && q.correct_mc) {
+            const correctKeys = q.correct_mc.split(',').map((k: string) => k.trim().toUpperCase());
+            isCorrectMc = correctKeys.includes(selectedMc.trim().toUpperCase());
+          } else {
+            isCorrectMc = false;
+          }
+        }
+
+        return {
+          id: q.id,
+          number: q.number,
+          type: q.type,
+          prompt: q.prompt,
+          points: q.points,
+          options: q.options || null,
+          correct_mc: q.correct_mc || null,
+          rubric_guide: q.rubric_guide || null,
+          student_selected_mc: selectedMc,
+          student_frq_text: frqText,
+          is_correct_mc: isCorrectMc,
+          frq_grade: frqGrade || null
+        };
+      });
+
+      res.json({
+        success: true,
+        scorecard: {
+          test_id: canonicalTestId,
+          event_name: test.event_name || canonicalTestId,
+          submitted_at: resObj.submitted_at,
+          mc_score: resObj.mc_score,
+          mc_total: resObj.mc_total,
+          frq_score: resObj.frq_score,
+          frq_total: resObj.frq_total,
+          total_score: resObj.total_score,
+          total_possible: resObj.total_possible,
+          infraction_count: resObj.infraction_count || 0,
+          questions: questionsBreakdown
+        }
+      });
+    } catch (e: any) {
+      console.error('Error fetching student scorecard:', e);
+      res.status(500).json({ error: e.message || 'Server error fetching scorecard' });
+    }
+  });
+
   // Create or resume Test Session
   app.post('/api/student/session', studentAuthMiddleware, async (req, res) => {
     const sId = (req as any).student_id;
@@ -2414,19 +3271,38 @@ async function startServer() {
       return res.status(400).json({ error: 'Missing test_id' });
     }
 
+    const found = await findTest(test_id);
+    if (!found || !found.test) {
+      return res.status(404).json({ error: 'Assigned test blueprint could not be found.' });
+    }
+    const test = found.test;
+    const canonicalTestId = test.test_id || found.testId;
+
     const roster = await readJsonSafe<Roster>('data/roster.json', { students: [] });
-    const isAssigned = roster.students.some(s => s.student_id === sId && (s.assigned_tests || []).includes(test_id));
+    const sObj = roster.students.find(s => s.student_id === sId);
+    if (!sObj) {
+      return res.status(404).json({ error: 'Student profile not found.' });
+    }
+
+    // Check if student is assigned to this test (flexible matching)
+    const cleanStr = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const isAssigned = (sObj.assigned_tests || []).some(at => {
+      if (at === test_id || at === canonicalTestId || at === found.testId) return true;
+      if (cleanStr(at) === cleanStr(test_id) || cleanStr(at) === cleanStr(canonicalTestId) || cleanStr(at) === cleanStr(found.testId)) return true;
+      if (test.event_name && cleanStr(at) === cleanStr(test.event_name)) return true;
+      return false;
+    });
+
     if (!isAssigned) {
       return res.status(403).json({ error: 'You are not assigned to take this test.' });
     }
 
-    const test = await readJsonSafe<Test>(`tests/${test_id}.json`, null);
-    if (!test || !test.active) {
+    if (test.active === false) {
       return res.status(404).json({ error: 'Assigned test is not actively broadcast.' });
     }
 
     // Check if result already submitted
-    const isCompleted = await fs.access(`data/results/${test_id}/${sId}.json`).then(() => true).catch(() => false);
+    const isCompleted = await fs.access(`data/results/${canonicalTestId}/${sId}.json`).then(() => true).catch(() => false);
     if (isCompleted) {
       return res.status(400).json({ error: 'You have already submitted this test.' });
     }
@@ -2438,7 +3314,7 @@ async function startServer() {
       for (const sf of sFiles) {
         if (sf.endsWith('.json')) {
           const sess = await readJsonSafe<Session>(`data/sessions/${sf}`, null);
-          if (sess && sess.student_id === sId && sess.test_id === test_id) {
+          if (sess && sess.student_id === sId && (sess.test_id === canonicalTestId || sess.test_id === test_id || sess.test_id === found.testId)) {
             existingSession = sess;
             break;
           }
@@ -2459,7 +3335,7 @@ async function startServer() {
       sessionObj = {
         session_id: sessId,
         student_id: sId,
-        test_id: test_id,
+        test_id: canonicalTestId,
         started_at: started.toISOString(),
         expires_at: expires.toISOString(),
         submitted_at: null,
@@ -2525,7 +3401,8 @@ async function startServer() {
     }
 
     // Fetch test questions, STRIPPING confidential properties (correct answers and guides)
-    const test = await readJsonSafe<Test>(`tests/${session.test_id}.json`, null);
+    const found = await findTest(session.test_id);
+    const test = found?.test;
     if (!test) {
       return res.status(404).json({ error: 'Original test blueprint could not be found.' });
     }
@@ -2665,11 +3542,14 @@ async function startServer() {
   // Helper evaluator & scoring engine
   async function evaluateAndSaveResult(session: Session) {
     try {
-      const test = await readJsonSafe<Test>(`tests/${session.test_id}.json`, null);
+      const found = await findTest(session.test_id);
+      const test = found?.test;
       if (!test) {
         console.error(`Scoring evaluation failed: test ${session.test_id} not found`);
         return;
       }
+
+      const canonicalTestId = test.test_id || found?.testId || session.test_id;
 
       let mcScore = 0;
       let mcTotal = 0;
@@ -2681,8 +3561,11 @@ async function startServer() {
         if (q.type === 'MC') {
           mcTotal += q.points;
           const studentAns = answersObj[q.id]?.selected_mc;
-          if (studentAns && q.correct_mc && studentAns.trim().toUpperCase() === q.correct_mc.trim().toUpperCase()) {
-            mcScore += q.points;
+          if (studentAns && q.correct_mc) {
+            const correctKeys = q.correct_mc.split(',').map((k: string) => k.trim().toUpperCase());
+            if (correctKeys.includes(studentAns.trim().toUpperCase())) {
+              mcScore += q.points;
+            }
           }
         } else {
           frqTotal += q.points;
@@ -2690,7 +3573,7 @@ async function startServer() {
       }
 
       // Preserve existing grades if we are re-submitting or overriding
-      const resultPath = `data/results/${session.test_id}/${session.student_id}.json`;
+      const resultPath = `data/results/${canonicalTestId}/${session.student_id}.json`;
       const existingResult = await readJsonSafe<Result>(resultPath, null);
       const frqGrades = existingResult?.frq_grades || {};
       let frqScore = 0;
@@ -2700,7 +3583,7 @@ async function startServer() {
 
       const result: Result = {
         student_id: session.student_id,
-        test_id: session.test_id,
+        test_id: canonicalTestId,
         session_id: session.session_id,
         submitted_at: session.submitted_at || new Date().toISOString(),
         mc_score: mcScore,
@@ -2713,9 +3596,16 @@ async function startServer() {
         infraction_count: session.infraction_count || 0
       };
 
-      await fs.mkdir(`data/results/${session.test_id}`, { recursive: true }).catch(() => {});
+      await fs.mkdir(`data/results/${canonicalTestId}`, { recursive: true }).catch(() => {});
       await writeJsonAtomic(resultPath, result);
-      console.log(`Saved graded result successfully for Student ${session.student_id}, Test ${session.test_id}`);
+
+      // If session.test_id is different from canonicalTestId, also write alias for fast direct reads
+      if (session.test_id && session.test_id !== canonicalTestId) {
+        await fs.mkdir(`data/results/${session.test_id}`, { recursive: true }).catch(() => {});
+        await writeJsonAtomic(`data/results/${session.test_id}/${session.student_id}.json`, result);
+      }
+
+      console.log(`Saved graded result successfully for Student ${session.student_id}, Test ${canonicalTestId}`);
     } catch (err) {
       console.error('Error in evaluateAndSaveResult execution:', err);
       throw err;
@@ -2731,14 +3621,119 @@ async function startServer() {
   }
 
 
+  
+  app.post('/api/admin/tests/:id/publish', adminAuthMiddleware, async (req, res) => {
+    try {
+      const found = await findTest(req.params.id);
+      if (!found || !found.test) return res.status(404).json({ error: 'Not found' });
+      found.test.grades_published = !!req.body.grades_published;
+      await writeJsonAtomic(found.filePath, found.test);
+      res.json({ success: true, test_id: found.testId, grades_published: found.test.grades_published });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Batch publish or unpublish grades for multiple tests
+  app.post('/api/admin/tests/publish-batch', adminAuthMiddleware, async (req, res) => {
+    try {
+      const { test_ids, grades_published } = req.body;
+      if (!Array.isArray(test_ids) || test_ids.length === 0) {
+        return res.status(400).json({ error: 'Missing or empty test_ids array' });
+      }
+
+      let updatedCount = 0;
+      const targetState = !!grades_published;
+
+      for (const testId of test_ids) {
+        const found = await findTest(testId);
+        if (found && found.test) {
+          found.test.grades_published = targetState;
+          await writeJsonAtomic(found.filePath, found.test);
+          updatedCount++;
+        }
+      }
+
+      res.json({
+        success: true,
+        updated_count: updatedCount,
+        grades_published: targetState
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Toggle or set a test's active (open/closed) status
+  app.post('/api/admin/tests/:id/active', adminAuthMiddleware, async (req, res) => {
+    try {
+      const found = await findTest(req.params.id);
+      if (!found || !found.test) return res.status(404).json({ error: 'Test not found' });
+      
+      const newActiveState = typeof req.body.active === 'boolean' ? req.body.active : !found.test.active;
+      found.test.active = newActiveState;
+      await writeJsonAtomic(found.filePath, found.test);
+      res.json({ success: true, test_id: found.testId, active: found.test.active });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Bulk open (activate) or close tests
+  app.post('/api/admin/tests/bulk-active', adminAuthMiddleware, async (req, res) => {
+    try {
+      const { test_ids, active } = req.body;
+      const targetActive = active !== false; // defaults to true (Bulk Open)
+      
+      let updatedCount = 0;
+      if (Array.isArray(test_ids) && test_ids.length > 0) {
+        for (const tid of test_ids) {
+          const found = await findTest(tid);
+          if (found && found.test) {
+            found.test.active = targetActive;
+            await writeJsonAtomic(found.filePath, found.test);
+            updatedCount++;
+          }
+        }
+      } else {
+        const allFiles = await fs.readdir('tests').catch(() => []);
+        for (const f of allFiles) {
+          if (f.endsWith('.json')) {
+            const tPath = path.join('tests', f);
+            const tObj = await readJsonSafe<any>(tPath, null);
+            if (tObj) {
+              tObj.active = targetActive;
+              await writeJsonAtomic(tPath, tObj);
+              updatedCount++;
+            }
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        updated_count: updatedCount,
+        active: targetActive,
+        message: targetActive 
+          ? `Successfully opened all ${updatedCount} test blueprints for student access.`
+          : `Successfully closed all ${updatedCount} test blueprints.`
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // --- FRONTEND ROUTING INTEGRATION (Vite middleware or SPA Host) ---
 
   app.get('/testwriter.html', (req, res) => {
     res.sendFile(path.resolve('testwriter.html'));
   });
 
-  if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.resolve('dist'), {
+  const distPath = path.resolve('dist');
+  const isProduction = process.env.NODE_ENV === 'production' || (existsSync(path.join(distPath, 'index.html')) && process.env.NODE_ENV !== 'development');
+
+  if (isProduction) {
+    app.use(express.static(distPath, {
       maxAge: '1y',
       setHeaders: (res, filePath) => {
         if (filePath.endsWith('.html')) {
@@ -2748,36 +3743,41 @@ async function startServer() {
     }));
     app.get('*', (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
-      res.sendFile(path.resolve('dist/index.html'));
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   } else {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'custom',
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
+      appType: 'spa',
     });
     
     app.use(vite.middlewares);
-    
-    app.get('*', async (req, res, next) => {
-      const url = req.originalUrl;
-      try {
-        let template = await fs.readFile(path.resolve('index.html'), 'utf-8');
-        template = await vite.transformIndexHtml(url, template);
-        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
-      } catch (e) {
-        vite.ssrFixStacktrace(e as Error);
-        next(e);
-      }
-    });
   }
 
+  // Global error handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Unhandled Error:", err);
+    res.status(500).json({ error: err.message || "Internal Server Error" });
+  });
+
   const port = 3000;
-  app.listen(port, '0.0.0.0', () => {
+  const server = app.listen(port, '0.0.0.0', () => {
     console.log(`===============================================`);
     console.log(`LAN OFFLINE TEST SERVER running globally!`);
     console.log(`Local Access (Host): http://localhost:${port}`);
     console.log(`Wi-Fi LAN IP Access: http://${getLocalIP()}:${port}`);
     console.log(`===============================================`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`Port ${port} is currently in use. Retrying or waiting for existing process to release...`);
+    } else {
+      console.error('Server listen error:', err);
+    }
   });
 }
 
@@ -2808,9 +3808,12 @@ async function sendStudentGradeEmail(
       let gradePoints = 0;
 
       if (q.type === 'MC') {
-        const isCorrect = q.correct_mc && ans?.selected_mc && q.correct_mc.trim().toUpperCase() === ans.selected_mc.trim().toUpperCase();
+        const correctKeys = q.correct_mc ? q.correct_mc.split(',').map((k: string) => k.trim().toUpperCase()) : [];
+        const studentAnsKey = ans?.selected_mc ? ans.selected_mc.trim().toUpperCase() : '';
+        const isCorrect = correctKeys.includes(studentAnsKey);
+
         studentAnsText = ans?.selected_mc ? `${ans.selected_mc}. ${q.options?.[ans.selected_mc] || ''}` : 'No Answer Selected';
-        correctKeyText = q.correct_mc ? `${q.correct_mc}. ${q.options?.[q.correct_mc] || ''}` : 'N/A';
+        correctKeyText = q.correct_mc ? `Accepted Keys: ${correctKeys.join(', ')}` : 'N/A';
         gradePoints = isCorrect ? q.points : 0;
         statusBg = isCorrect ? '#ECFDF5' : '#FEF2F2';
         statusText = isCorrect ? 'Correct' : 'Incorrect';
@@ -2829,7 +3832,7 @@ async function sendStudentGradeEmail(
       }
 
       const notes = q.type === 'MC'
-        ? (q.correct_mc === ans?.selected_mc ? 'Full Credit Awarded.' : `Incorrect response. Correct Key: ${q.correct_mc}`)
+        ? (correctKeyText !== 'N/A' && (correctKeyText.includes(`Accepted Keys: `) && q.correct_mc && ans?.selected_mc && q.correct_mc.split(',').map((k: string) => k.trim().toUpperCase()).includes(ans.selected_mc.trim().toUpperCase())) ? 'Full Credit Awarded.' : `Incorrect response. Correct Key(s): ${q.correct_mc}`)
         : (result.frq_grades?.[q.id]?.notes || 'No comments left.');
 
       questionsHtml += `
